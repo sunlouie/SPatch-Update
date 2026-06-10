@@ -1,4 +1,3 @@
----
 name: Android Build & Package Rename
 
 "on":
@@ -50,8 +49,9 @@ jobs:
     permissions:
       contents: read
 
-    env:
-      ANDROID_SDK_ROOT: "${{ runner.temp }}/Android/Sdk"
+    # ❌ 删掉这个 job 级别的 env，runner.temp 在这里不可用
+    # env:
+    #   ANDROID_SDK_ROOT: "${{ runner.temp }}/Android/Sdk"
 
     steps:
       - name: "Checkout repository"
@@ -67,6 +67,7 @@ jobs:
           cache: "gradle"
 
       - name: "Setup Android SDK"
+        id: "setup-android"
         uses: "android-actions/setup-android@v3"
         with:
           cmdline-tools-version: "9477386"
@@ -166,29 +167,24 @@ jobs:
           OLD="$OLD_PKG"
           NEW="$NEW_PKG"
           
-          # 转义正则特殊字符用于 sed
           OLD_ESC=$(printf '%s' "$OLD" | sed 's/[]\/$*.^[]/\\&/g')
           
-          # 替换源码中的包名
           find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' \) \
             ! -path '*/build/*' \
             -exec sed -i "s/${OLD_ESC}/${NEW}/g" {} + || true
           
-          # 替换 build.gradle
           if [[ -f "app/build.gradle" ]]; then
             sed -i "s/applicationId[[:space:]]*\"[^\"]*\"/applicationId \"$NEW\"/g" app/build.gradle || true
             sed -i "s/versionName[[:space:]]*\"[^\"]*\"/versionName \"$VER_NAME\"/g" app/build.gradle || true
             sed -i "s/versionCode[[:space:]]*[0-9]\+/versionCode $VER_CODE/g" app/build.gradle || true
           fi
           
-          # 替换 AndroidManifest.xml
           MANIFEST="app/src/main/AndroidManifest.xml"
           if [[ -f "$MANIFEST" ]]; then
             sed -i -E "s/(<manifest[^>]*package=\")([^\"]+)\"/\1${NEW}\"/g" "$MANIFEST" || true
             sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_LABEL\"/g" "$MANIFEST" || true
           fi
           
-          # 移动源码目录
           OLD_DIR="app/src/main/java/${OLD//./\/}"
           NEW_DIR="app/src/main/java/${NEW//./\/}"
           if [[ -d "$OLD_DIR" && ! -d "$NEW_DIR" ]]; then
@@ -237,7 +233,9 @@ jobs:
           KFILE: "${{ steps.keystore.outputs.keystore }}"
         run: |
           set -euo pipefail
-          BT="${ANDROID_SDK_ROOT}/build-tools/33.0.2"
+          # ✅ setup-android 已经自动设置了 ANDROID_SDK_ROOT，直接用就行
+          # 如果实在不放心，也可以用 $RUNNER_TEMP（这是 shell 环境变量，不是 YAML 表达式）
+          BT="${ANDROID_SDK_ROOT:-$RUNNER_TEMP/Android/Sdk}/build-tools/33.0.2"
           mkdir -p out_apks
           
           shopt -s globstar nullglob
