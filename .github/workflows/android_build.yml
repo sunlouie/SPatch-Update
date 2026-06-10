@@ -67,7 +67,6 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y zip unzip grep sed findutils
 
-      # ✅ 修复 3：使用皮实耐用的 sed 替换娇贵的 grep -P
       - name: "Auto-detect old package"
         id: "detect"
         run: |
@@ -135,7 +134,6 @@ jobs:
           echo "keystore=$KEYSTORE" >> "$GITHUB_OUTPUT"
         shell: bash
 
-      # ✅ 修复 4：修复 sed 转义正则的漏洞
       - name: "Replace package & version"
         env:
           OLD_PKG: "${{ steps.detect.outputs.old_package }}"
@@ -197,26 +195,6 @@ jobs:
             >> gradle.properties
         shell: bash
 
-      - name: "Remove domestic mirrors from Gradle"
-        run: |
-          set -euo pipefail
-          echo "Replacing domestic mirrors with official repositories..."
-          find . -type f \( -name "build.gradle" -o -name "settings.gradle" -o -name "*.gradle" -o -name "*.gradle.kts" \) \
-            ! -path "*/build/*" \
-            -exec sed -i \
-              -e 's|https://maven.aliyun.com/repository/google|https://dl.google.com/dl/android/maven2|g' \
-              -e 's|https://maven.aliyun.com/repository/central|https://repo.maven.apache.org/maven2|g' \
-              -e 's|https://maven.aliyun.com/repository/public|https://repo.maven.apache.org/maven2|g' \
-              -e 's|https://maven.aliyun.com/repository/gradle-plugin|https://plugins.gradle.org/m2|g' \
-              -e 's|https://maven.aliyun.com/nexus/content/repositories/releases|https://repo.maven.apache.org/maven2|g' \
-              -e 's|https://mirrors.cloud.tencent.com/nexus/content/repositories/releases|https://repo.maven.apache.org/maven2|g' \
-              -e 's|https://mirrors.cloud.tencent.com/maven|https://repo.maven.apache.org/maven2|g' \
-              -e 's|https://developer.huawei.com/repo|https://maven.google.com|g' \
-              {} + || true
-          echo "Done. All mirrors replaced with official sources."
-        shell: bash
-
-      # ✅ 修复 1 & 2：修正 API 上下文引用，并优化 SDK 安装逻辑
       - name: "Install Android SDK components (robust)"
         run: |
           set -euo pipefail
@@ -256,12 +234,11 @@ jobs:
           echo "Using sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses || true
           
-          # ✅ 核心修复：使用正确的 github.event.inputs 上下文
+          # 使用正确的 github.event.inputs 上下文获取 API 级别
           API="${{ github.event.inputs.api_level }}"
           "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2" "platforms;android-33"
         shell: bash
 
-      # ✅ 修复 5：如果没有 gradlew 直接报错拦截，杜绝环境不一致
       - name: "Verify gradle wrapper & versions"
         run: |
           set -euo pipefail
@@ -272,7 +249,6 @@ jobs:
           else
             echo "❌ Error: gradlew not found."
             echo "Please commit the Gradle wrapper (gradlew, gradlew.bat, and gradle/wrapper/) to your repository."
-            echo "Generating a random system gradle wrapper is disabled to prevent AGP version mismatches."
             exit 1
           fi
         shell: bash
