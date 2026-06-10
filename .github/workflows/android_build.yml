@@ -1,0 +1,217 @@
+name: Android build and package-rename
+on:
+  workflow_dispatch:
+    inputs:
+      old_package:
+        description: 'Original package name to replace (optional). If empty the workflow will try to auto-detect.'
+        required: false
+      new_package:
+        description: 'New package name (default: com.whty.ebrowser)'
+        required: false
+        default: 'com.whty.ebrowser'
+      app_label:
+        description: 'Application label (display name)'
+        required: false
+        default: '狼分身'
+      version_name:
+        description: 'Version name (e.g. 2.0.1.241130_BYOD)'
+        required: false
+        default: '2.0.1.241130_BYOD'
+      version_code:
+        description: 'Version code (integer)'
+        required: false
+        default: '14'
+      keystore_seed:
+        description: 'Optional seed string to generate deterministic keystore. Leave empty to generate random.'
+        required: false
+      gradle_task:
+        description: 'Gradle task to run (default: app:assembleRelease)'
+        required: false
+        default: 'app:assembleRelease'
+
+jobs:
+  build:
+    name: Build APK (auto-detect old package, rename, sign)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/Android/Sdk
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Install utilities
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip wget zip expect grep
+
+      - name: Install Android SDK command-line tools and build-tools
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          cd "$HOME"
+          TOOL_Z=commandlinetools-linux_latest.zip
+          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -O "$TOOL_Z"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/tmp"
+          unzip -q "$TOOL_Z" -d "$ANDROID_SDK_ROOT/cmdline-tools/tmp"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/tmp/cmdline-tools"/* "$ANDROID_SDK_ROOT/cmdline-tools/latest/" || true
+          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/tmp" "$TOOL_Z"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+        shell: bash
+
+      - name: Auto-detect old package if not provided
+        id: detect
+        run: |
+          set -euo pipefail
+          PROVIDED="${{ github.event.inputs.old_package }}"
+          if [ -n "$PROVIDED" ]; then
+            echo "old_package=$PROVIDED" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            PKG=$(grep -o 'package="[^"]*"' "$MANIFEST" || true | head -n1 | sed -E 's/package="([^"]*)"/\1/')
+            if [ -n "$PKG" ]; then
+              echo "Detected package from AndroidManifest.xml: $PKG"
+              echo "old_package=$PKG" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          PKG=$(grep -R --line-number --exclude-dir="**/build" -h "^package " app/src/main/java || true | sed -E 's/package[[:space:]]+//;s/;//' | awk -F'.' '{print $1"."$2"."$3}' | sort | uniq -c | sort -rn | head -n1 | awk '{print $2}')
+          if [ -n "$PKG" ]; then
+            echo "Detected package root from sources: $PKG"
+            echo "old_package=$PKG" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "No package detected, defaulting to com.android.launcher2"
+          echo "old_package=com.android.launcher2" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Derive keystore password and create keystore
+        id: keystore
+        run: |
+          set -euo pipefail
+          SEED="${{ github.event.inputs.keystore_seed }}"
+          if [ -z "$SEED" ]; then
+            SEED=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
+            echo "Generated random keystore_seed: $SEED"
+          else
+            echo "Using provided keystore_seed (truncated): ${SEED:0:16}..."
+          fi
+          STOREPASS=$(echo -n "$SEED" | sha256sum | cut -c1-16)
+          KEYPASS=$(echo -n "key$SEED" | sha256sum | cut -c1-16)
+          ALIAS="androidkey"
+          KEYSTORE=release.keystore
+
+          keytool -genkeypair -v -storetype JKS -keystore "$KEYSTORE" -storepass "$STOREPASS" -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -keypass "$KEYPASS" -dname "CN=Android,O=Auto,OU=CI,C=US" || true
+
+          KEYSTORE_B64=$(base64 "$KEYSTORE" | tr -d '\n')
+          echo "storepass=$STOREPASS" >> $GITHUB_OUTPUT
+          echo "keypass=$KEYPASS" >> $GITHUB_OUTPUT
+          echo "alias=$ALIAS" >> $GITHUB_OUTPUT
+          echo "keystore_b64=$KEYSTORE_B64" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Replace package names, app label, version in sources
+        run: |
+          set -euo pipefail
+          OLD="${{ steps.detect.outputs.old_package }}"
+          NEW="${{ github.event.inputs.new_package }}"
+          if [ -z "$NEW" ]; then NEW="com.whty.ebrowser"; fi
+          APP_LABEL="${{ github.event.inputs.app_label }}"
+          if [ -z "$APP_LABEL" ]; then APP_LABEL="狼分身"; fi
+          VER_NAME="${{ github.event.inputs.version_name }}"
+          VER_CODE="${{ github.event.inputs.version_code }}"
+
+          echo "Replacing package: $OLD -> $NEW"
+
+          OLD_ESC=$(printf '%s' "$OLD" | sed 's/[\\/&]/\\\\&/g; s/\\./\\\\./g')
+
+          find . -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' -o -name '*.gradle' -o -name '*.properties' -o -name 'AndroidManifest.xml' \) -print0 \
+            | xargs -0 sed -i "s/${OLD_ESC}/${NEW}/g" || true
+
+          OLD_DIR="app/src/main/java/$(echo $OLD | tr '.' '/')"
+          NEW_DIR="app/src/main/java/$(echo $NEW | tr '.' '/')"
+          if [ -d "$OLD_DIR" ]; then
+            mkdir -p "$(dirname "$NEW_DIR")"
+            echo "Moving $OLD_DIR -> $NEW_DIR"
+            mv "$OLD_DIR" "$NEW_DIR" || true
+          else
+            echo "No source dir $OLD_DIR to move"
+          fi
+
+          if [ -f app/build.gradle ]; then
+            sed -i "s/applicationId[[:space:]]*\"[^\"]*\"/applicationId \"$NEW\"/g" app/build.gradle || true
+            sed -i "s/versionName[[:space:]]*\"[^\"]*\"/versionName \"$VER_NAME\"/g" app/build.gradle || true
+            sed -i "s/versionCode[[:space:]]*[0-9]*/versionCode $VER_CODE/g" app/build.gradle || true
+          fi
+
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            sed -i "s/\(<manifest[^>]*package=\)\"[^\"]*\"/\1\"$NEW\"/g" "$MANIFEST" || true
+            sed -i "s/\(android:label=\)\"[^\"]*\"/\1\"$APP_LABEL\"/g" "$MANIFEST" || true
+          fi
+
+          echo "Replacement complete. Please review changes locally if needed."
+        shell: bash
+
+      - name: Run Gradle build (use wrapper if present)
+        env:
+          STOREPASS: ${{ steps.keystore.outputs.storepass }}
+          KEYPASS: ${{ steps.keystore.outputs.keypass }}
+          ALIAS: ${{ steps.keystore.outputs.alias }}
+        run: |
+          set -euo pipefail
+          TASK="${{ github.event.inputs.gradle_task }}"
+          if [ -z "$TASK" ]; then TASK="app:assembleRelease"; fi
+          echo "Gradle task: $TASK"
+
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew $TASK -Pandroid.injected.signing.store.file=$(pwd)/release.keystore -Pandroid.injected.signing.store.password=$STOREPASS -Pandroid.injected.signing.key.alias=$ALIAS -Pandroid.injected.signing.key.password=$KEYPASS --no-daemon || true
+          else
+            sudo apt-get update -y
+            sudo apt-get install -y gradle
+            gradle wrapper || true
+            ./gradlew $TASK -Pandroid.injected.signing.store.file=$(pwd)/release.keystore -Pandroid.injected.signing.store.password=$STOREPASS -Pandroid.injected.signing.key.alias=$ALIAS -Pandroid.injected.signing.key.password=$KEYPASS --no-daemon || true
+          fi
+        shell: bash
+
+      - name: Find APKs and sign if necessary
+        env:
+          STOREPASS: ${{ steps.keystore.outputs.storepass }}
+          KEYPASS: ${{ steps.keystore.outputs.keypass }}
+          ALIAS: ${{ steps.keystore.outputs.alias }}
+          BUILD_TOOLS: ${{ env.ANDROID_SDK_ROOT }}/build-tools/33.0.2
+        run: |
+          set -euo pipefail
+          mkdir -p out_apks
+          echo "Looking for APKs under app/build/outputs"
+          find app -type f -name '*.apk' -print -exec bash -lc 'APK="$0"; echo "Found $APK"; BASENAME=$(basename "$APK"); OUT="out_apks/${BASENAME%.*}-signed.apk"; "$BUILD_TOOLS/apksigner" sign --ks release.keystore --ks-key-alias "$ALIAS" --ks-pass pass:$STOREPASS --key-pass pass:$KEYPASS --out "$OUT" "$APK" || true' {} \;
+          ls -la out_apks || true
+        shell: bash
+
+      - name: Upload built APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-apks
+          path: out_apks/
+
+      - name: Output keystore (base64) and passwords
+        run: |
+          echo "keystore_base64=${{ steps.keystore.outputs.keystore_b64 }}"
+          echo "storepass=${{ steps.keystore.outputs.storepass }}"
+          echo "keypass=${{ steps.keystore.outputs.keypass }}"
+        shell: bash
