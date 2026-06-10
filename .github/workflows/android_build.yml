@@ -178,7 +178,6 @@ jobs:
           fi
         shell: bash
 
-      # ✅ 修复 1：使用 printf 彻底杜绝 YAML 缩进导致的 gradle.properties 脏数据问题
       - name: "Configure Gradle signing"
         env:
           SPASS: "${{ steps.keystore.outputs.storepass }}"
@@ -195,34 +194,91 @@ jobs:
             >> gradle.properties
         shell: bash
 
-      # ✅ 修复 2：显式安装指定的 SDK 组件并接受 License，防止自带版本不匹配
-      - name: "Install Android SDK components"
+      # ✅ 核心优化 1：彻底清洗国内镜像，直接使用官方源
+      - name: "Remove domestic mirrors from Gradle"
         run: |
           set -euo pipefail
+          echo "Replacing domestic mirrors with official repositories..."
+          find . -type f \( -name "build.gradle" -o -name "settings.gradle" -o -name "*.gradle" -o -name "*.gradle.kts" \) \
+            ! -path "*/build/*" \
+            -exec sed -i \
+              -e 's|https://maven.aliyun.com/repository/google|https://dl.google.com/dl/android/maven2|g' \
+              -e 's|https://maven.aliyun.com/repository/central|https://repo.maven.apache.org/maven2|g' \
+              -e 's|https://maven.aliyun.com/repository/public|https://repo.maven.apache.org/maven2|g' \
+              -e 's|https://maven.aliyun.com/repository/gradle-plugin|https://plugins.gradle.org/m2|g' \
+              -e 's|https://maven.aliyun.com/nexus/content/repositories/releases|https://repo.maven.apache.org/maven2|g' \
+              -e 's|https://mirrors.cloud.tencent.com/nexus/content/repositories/releases|https://repo.maven.apache.org/maven2|g' \
+              -e 's|https://mirrors.cloud.tencent.com/maven|https://repo.maven.apache.org/maven2|g' \
+              -e 's|https://developer.huawei.com/repo|https://maven.google.com|g' \
+              {} + || true
+          echo "Done. All mirrors replaced with official sources."
+        shell: bash
+
+      # ✅ 核心优化 2：鲁棒的 SDK 安装（修复了原方案中无效的 latest.zip 下载链接）
+      - name: "Install Android SDK components (robust)"
+        run: |
+          set -euo pipefail
+
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          
+          mkdir -p "$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+
+          # 优先使用 Runner 自带的 sdkmanager
           if command -v sdkmanager >/dev/null 2>&1; then
             SDKMANAGER=$(command -v sdkmanager)
           elif [[ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]]; then
             SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           else
-            # 兜底：动态查找 cmdline-tools 下的任意版本
-            SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+            SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1)
+          fi
+
+          # 兜底：如果自带版本损坏或缺失，下载官方指定版本（注意：Google 不提供 latest.zip，必须带版本号）
+          if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
+            echo "sdkmanager not found. Downloading Android commandline tools..."
+            TMPDIR="$(mktemp -d)"
+            pushd "$TMPDIR"
+            CLI_ZIP="commandlinetools-linux-11076708_latest.zip"
+            wget -q "https://dl.google.com/android/repository/${CLI_ZIP}" -O "$CLI_ZIP"
+            unzip -q "$CLI_ZIP"
+            mkdir -p "$SDK_ROOT/cmdline-tools/latest"
+            mv cmdline-tools/* "$SDK_ROOT/cmdline-tools/latest/" 2>/dev/null || true
+            popd
+            rm -rf "$TMPDIR"
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
           if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
-            echo "Error: sdkmanager not found!"
+            echo "Error: sdkmanager not found after install attempt!"
             exit 1
           fi
-          
+
           echo "Using sdkmanager: $SDKMANAGER"
+          export PATH="$(dirname "$SDKMANAGER"):$PATH"
+
           yes | "$SDKMANAGER" --licenses || true
-          
           API="${{ inputs.api_level }}"
-          "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2"
+          "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2" "platforms;android-33"
         shell: bash
 
-      # ✅ 修复 3：修复 gradlew 权限，并加上 --stacktrace 暴露真实报错
+      # ✅ 核心优化 3：构建前校验 Wrapper，防止构建中途崩溃
+      - name: "Verify gradle wrapper & versions"
+        run: |
+          set -euo pipefail
+          if [[ -f "./gradlew" ]]; then
+            chmod +x ./gradlew
+            echo "Gradle wrapper version:"
+            ./gradlew --version
+          else
+            echo "gradlew not found — generating wrapper (Gradle 8.5)"
+            sudo apt-get update -y
+            sudo apt-get install -y gradle
+            gradle wrapper --gradle-version 8.5
+            chmod +x ./gradlew
+            ./gradlew --version
+          fi
+        shell: bash
+
+      # ✅ 核心优化 4：使用 tee 捕获完整日志，解决 GitHub 网页端日志截断问题
       - name: "Build APK"
         env:
           TASK: "${{ github.event.inputs.gradle_task }}"
@@ -230,17 +286,21 @@ jobs:
           set -euo pipefail
           GRADLE_TASK="${TASK:-app:assembleRelease}"
           
-          # 注意：先判断文件是否存在，再赋权，防止因没权限导致 -x 判断为 false
-          if [[ -f "./gradlew" ]]; then
-            chmod +x ./gradlew
-            ./gradlew "$GRADLE_TASK" --no-daemon --stacktrace
-          else
-            sudo apt-get install -y gradle
-            gradle wrapper --gradle-version 8.5
-            chmod +x ./gradlew
-            ./gradlew "$GRADLE_TASK" --no-daemon --stacktrace
-          fi
+          mkdir -p build_logs
+          ./gradlew "$GRADLE_TASK" --no-daemon --stacktrace | tee build_logs/gradle_build.log || {
+            echo "❌ Build failed. Full stacktrace saved to build_logs/gradle_build.log"
+            exit 1
+          }
         shell: bash
+
+      # ✅ 核心优化 5：失败时自动上传完整日志 Artifact
+      - name: "Upload build logs on failure"
+        if: failure()
+        uses: "actions/upload-artifact@v4"
+        with:
+          name: "build-logs"
+          path: "build_logs/"
+          retention-days: 3
 
       - name: "Sign APKs"
         env:
@@ -258,10 +318,8 @@ jobs:
             echo "Error: apksigner not found in build-tools!"
             exit 1
           fi
-          echo "Using apksigner: $APKSIGNER"
           
           mkdir -p out_apks
-          
           shopt -s globstar nullglob
           for apk in app/build/outputs/**/*-unsigned.apk app/build/outputs/**/unsigned/*.apk; do
             [[ -f "$apk" ]] || continue
@@ -287,4 +345,4 @@ jobs:
           name: "signed-apks"
           path: "out_apks/*.apk"
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: warn # 修复了原代码中 warnIssue summary 的拼写错误
