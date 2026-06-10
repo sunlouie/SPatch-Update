@@ -67,6 +67,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y zip unzip grep sed findutils
 
+      # ✅ 修复 3：使用皮实耐用的 sed 替换娇贵的 grep -P
       - name: "Auto-detect old package"
         id: "detect"
         run: |
@@ -80,7 +81,7 @@ jobs:
           
           DETECTED=""
           if [[ -f "app/build.gradle" ]]; then
-            DETECTED=$(grep -oP 'applicationId\s*"\K[^"]+' app/build.gradle 2>/dev/null | head -n1) || true
+            DETECTED=$(sed -n 's/.*applicationId[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle 2>/dev/null | head -n1) || true
             if [[ -n "$DETECTED" ]]; then
               echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
               exit 0
@@ -88,7 +89,7 @@ jobs:
           fi
           
           if [[ -f "app/src/main/AndroidManifest.xml" ]]; then
-            DETECTED=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml 2>/dev/null | head -n1) || true
+            DETECTED=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' app/src/main/AndroidManifest.xml 2>/dev/null | head -n1) || true
             if [[ -n "$DETECTED" ]]; then
               echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
               exit 0
@@ -134,6 +135,7 @@ jobs:
           echo "keystore=$KEYSTORE" >> "$GITHUB_OUTPUT"
         shell: bash
 
+      # ✅ 修复 4：修复 sed 转义正则的漏洞
       - name: "Replace package & version"
         env:
           OLD_PKG: "${{ steps.detect.outputs.old_package }}"
@@ -152,7 +154,8 @@ jobs:
           OLD="$OLD_PKG"
           NEW="$NEW_PKG"
           
-          OLD_ESC=$(printf '%s' "$OLD" | sed 's/[]\/$*.^[]/\\&/g')
+          # 使用更严谨的转义规则，防止特殊字符导致 sed 崩溃
+          OLD_ESC=$(printf '%s' "$OLD" | sed -e 's/[\/&]/\\&/g')
           
           find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' \) \
             ! -path '*/build/*' \
@@ -194,7 +197,6 @@ jobs:
             >> gradle.properties
         shell: bash
 
-      # ✅ 核心优化 1：彻底清洗国内镜像，直接使用官方源
       - name: "Remove domestic mirrors from Gradle"
         run: |
           set -euo pipefail
@@ -214,7 +216,7 @@ jobs:
           echo "Done. All mirrors replaced with official sources."
         shell: bash
 
-      # ✅ 核心优化 2：鲁棒的 SDK 安装（修复了原方案中无效的 latest.zip 下载链接）
+      # ✅ 修复 1 & 2：修正 API 上下文引用，并优化 SDK 安装逻辑
       - name: "Install Android SDK components (robust)"
         run: |
           set -euo pipefail
@@ -223,7 +225,6 @@ jobs:
           mkdir -p "$SDK_ROOT"
           export ANDROID_SDK_ROOT="$SDK_ROOT"
 
-          # 优先使用 Runner 自带的 sdkmanager
           if command -v sdkmanager >/dev/null 2>&1; then
             SDKMANAGER=$(command -v sdkmanager)
           elif [[ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]]; then
@@ -232,7 +233,6 @@ jobs:
             SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1)
           fi
 
-          # 兜底：如果自带版本损坏或缺失，下载官方指定版本（注意：Google 不提供 latest.zip，必须带版本号）
           if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
             echo "sdkmanager not found. Downloading Android commandline tools..."
             TMPDIR="$(mktemp -d)"
@@ -252,15 +252,16 @@ jobs:
             exit 1
           fi
 
-          echo "Using sdkmanager: $SDKMANAGER"
           export PATH="$(dirname "$SDKMANAGER"):$PATH"
-
+          echo "Using sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses || true
-          API="${{ inputs.api_level }}"
+          
+          # ✅ 核心修复：使用正确的 github.event.inputs 上下文
+          API="${{ github.event.inputs.api_level }}"
           "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2" "platforms;android-33"
         shell: bash
 
-      # ✅ 核心优化 3：构建前校验 Wrapper，防止构建中途崩溃
+      # ✅ 修复 5：如果没有 gradlew 直接报错拦截，杜绝环境不一致
       - name: "Verify gradle wrapper & versions"
         run: |
           set -euo pipefail
@@ -269,16 +270,13 @@ jobs:
             echo "Gradle wrapper version:"
             ./gradlew --version
           else
-            echo "gradlew not found — generating wrapper (Gradle 8.5)"
-            sudo apt-get update -y
-            sudo apt-get install -y gradle
-            gradle wrapper --gradle-version 8.5
-            chmod +x ./gradlew
-            ./gradlew --version
+            echo "❌ Error: gradlew not found."
+            echo "Please commit the Gradle wrapper (gradlew, gradlew.bat, and gradle/wrapper/) to your repository."
+            echo "Generating a random system gradle wrapper is disabled to prevent AGP version mismatches."
+            exit 1
           fi
         shell: bash
 
-      # ✅ 核心优化 4：使用 tee 捕获完整日志，解决 GitHub 网页端日志截断问题
       - name: "Build APK"
         env:
           TASK: "${{ github.event.inputs.gradle_task }}"
@@ -293,7 +291,6 @@ jobs:
           }
         shell: bash
 
-      # ✅ 核心优化 5：失败时自动上传完整日志 Artifact
       - name: "Upload build logs on failure"
         if: failure()
         uses: "actions/upload-artifact@v4"
@@ -345,4 +342,4 @@ jobs:
           name: "signed-apks"
           path: "out_apks/*.apk"
           retention-days: 7
-          if-no-files-found: warn # 修复了原代码中 warnIssue summary 的拼写错误
+          if-no-files-found: warn
