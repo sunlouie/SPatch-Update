@@ -239,17 +239,39 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2" "platforms;android-33"
         shell: bash
 
-      - name: "Verify gradle wrapper & versions"
+      - name: "Verify gradle wrapper & versions (Auto-fix if missing)"
         run: |
           set -euo pipefail
           if [[ -f "./gradlew" ]]; then
             chmod +x ./gradlew
-            echo "Gradle wrapper version:"
+            echo "Using committed gradlew"
             ./gradlew --version
           else
-            echo "❌ Error: gradlew not found."
-            echo "Please commit the Gradle wrapper (gradlew, gradlew.bat, and gradle/wrapper/) to your repository."
-            exit 1
+            echo "gradlew not found — installing Gradle CLI and generating wrapper"
+            sudo apt-get update -y
+            sudo apt-get install -y wget unzip
+            
+            # 尝试从 properties 文件中智能提取项目指定的 Gradle 版本
+            GRADLE_VER="8.4"
+            if [[ -f "gradle/wrapper/gradle-wrapper.properties" ]]; then
+              DETECTED_VER=$(grep 'distributionUrl' gradle/wrapper/gradle-wrapper.properties | grep -o 'gradle-[0-9.]\+' | grep -o '[0-9.]\+' || true)
+              if [[ -n "$DETECTED_VER" ]]; then
+                GRADLE_VER="$DETECTED_VER"
+                echo "Detected Gradle version from properties: $GRADLE_VER"
+              fi
+            else
+              echo "No gradle-wrapper.properties found, using default Gradle version: $GRADLE_VER"
+            fi
+
+            # 下载并安装 Gradle
+            wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip -O /tmp/gradle.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt/gradle
+            export PATH="/opt/gradle/gradle-${GRADLE_VER}/bin:$PATH"
+            
+            # 动态生成 wrapper
+            gradle wrapper --gradle-version "${GRADLE_VER}"
+            chmod +x ./gradlew
+            ./gradlew --version
           fi
         shell: bash
 
