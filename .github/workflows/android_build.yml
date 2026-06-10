@@ -1,12 +1,12 @@
-name: Android build and package-rename
+name: Android Build & Package Rename
 on:
   workflow_dispatch:
     inputs:
       old_package:
-        description: 'Original package name to replace (optional). If empty the workflow will try to auto-detect.'
+        description: 'Original package name to replace (optional). If empty, auto-detect from build.gradle or AndroidManifest.xml'
         required: false
       new_package:
-        description: 'New package name (default: com.whty.ebrowser)'
+        description: 'New package name'
         required: false
         default: 'com.whty.ebrowser'
       app_label:
@@ -22,20 +22,31 @@ on:
         required: false
         default: '14'
       keystore_seed:
-        description: 'Optional seed string to generate deterministic keystore. Leave empty to generate random.'
+        description: 'Optional seed string for deterministic keystore generation. Leave empty for random.'
         required: false
       gradle_task:
-        description: 'Gradle task to run (default: app:assembleRelease)'
+        description: 'Gradle task to execute'
         required: false
         default: 'app:assembleRelease'
+      api_level:
+        description: 'Android API level to use for build tools'
+        required: false
+        default: '33'
 
 jobs:
   build:
-    name: Build APK (auto-detect old package, rename, sign)
+    name: Build & Rename APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/Android/Sdk
+      # 使用 setup-android action 会自动设置这些，这里仅作文档说明
+      # ANDROID_SDK_ROOT: ${{ runner.temp }}/Android/Sdk
+
     steps:
+      # ─────────────────────────────────────────────────────────────
+      # 1️⃣ 基础准备
+      # ─────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -46,172 +57,348 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '11'
+          cache: 'gradle'
 
-      - name: Install utilities
+      # ✅ 使用官方维护的 Android 环境 setup action [[20]][[22]]
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 9477386
+          packages: |
+            platform-tools
+            platforms;android-${{ inputs.api_level }}
+            build-tools;33.0.2
+
+      - name: Install additional utilities
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y unzip wget zip expect grep
+          sudo apt-get install -y zip unzip grep sed findutils
 
-      - name: Install Android SDK command-line tools and build-tools
-        run: |
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          cd "$HOME"
-          TOOL_Z=commandlinetools-linux_latest.zip
-          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -O "$TOOL_Z"
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/tmp"
-          unzip -q "$TOOL_Z" -d "$ANDROID_SDK_ROOT/cmdline-tools/tmp"
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/tmp/cmdline-tools"/* "$ANDROID_SDK_ROOT/cmdline-tools/latest/" || true
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/tmp" "$TOOL_Z"
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-        shell: bash
-
-      - name: Auto-detect old package if not provided
+      # ─────────────────────────────────────────────────────────────
+      # 2️⃣ 自动检测旧包名（优先 build.gradle → AndroidManifest.xml → 源码 → 默认值）
+      # ─────────────────────────────────────────────────────────────
+      - name: Auto-detect old package name
         id: detect
         run: |
           set -euo pipefail
-          PROVIDED="${{ github.event.inputs.old_package }}"
-          if [ -n "$PROVIDED" ]; then
-            echo "old_package=$PROVIDED" >> $GITHUB_OUTPUT
+          INPUT_OLD="${{ github.event.inputs.old_package }}"
+          
+          if [[ -n "$INPUT_OLD" ]]; then
+            echo "✅ Using user-provided old_package: $INPUT_OLD"
+            echo "old_package=$INPUT_OLD" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          MANIFEST="app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            PKG=$(grep -o 'package="[^"]*"' "$MANIFEST" || true | head -n1 | sed -E 's/package="([^"]*)"/\1/')
-            if [ -n "$PKG" ]; then
-              echo "Detected package from AndroidManifest.xml: $PKG"
-              echo "old_package=$PKG" >> $GITHUB_OUTPUT
+          
+          DETECTED=""
+          
+          # 优先从 app/build.gradle 读取 applicationId
+          if [[ -f "app/build.gradle" ]]; then
+            DETECTED=$(grep -oP 'applicationId\s*"\K[^"]+' app/build.gradle 2>/dev/null | head -n1) || true
+            if [[ -n "$DETECTED" ]]; then
+              echo "✅ Detected from app/build.gradle: $DETECTED"
+              echo "old_package=$DETECTED" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
-
-          PKG=$(grep -R --line-number --exclude-dir="**/build" -h "^package " app/src/main/java || true | sed -E 's/package[[:space:]]+//;s/;//' | awk -F'.' '{print $1"."$2"."$3}' | sort | uniq -c | sort -rn | head -n1 | awk '{print $2}')
-          if [ -n "$PKG" ]; then
-            echo "Detected package root from sources: $PKG"
-            echo "old_package=$PKG" >> $GITHUB_OUTPUT
-            exit 0
+          
+          # 次选从 AndroidManifest.xml 读取 package 属性
+          if [[ -f "app/src/main/AndroidManifest.xml" ]]; then
+            DETECTED=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml 2>/dev/null | head -n1) || true
+            if [[ -n "$DETECTED" ]]; then
+              echo "✅ Detected from AndroidManifest.xml: $DETECTED"
+              echo "old_package=$DETECTED" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
-
-          echo "No package detected, defaulting to com.android.launcher2"
-          echo "old_package=com.android.launcher2" >> $GITHUB_OUTPUT
+          
+          # 回退：从 Java/Kotlin 源码中推断包根（取出现频率最高的前三段）
+          if [[ -d "app/src/main/java" ]]; then
+            DETECTED=$(find app/src/main/java -type f \( -name '*.java' -o -name '*.kt' \) \
+              -exec grep -h '^package ' {} \; 2>/dev/null | \
+              sed -E 's/package[[:space:]]+//; s/;//' | \
+              awk -F'.' '{print $1"."$2"."$3}' | \
+              sort | uniq -c | sort -rn | head -n1 | awk '{print $2}') || true
+            if [[ -n "$DETECTED" ]]; then
+              echo "⚠️  Inferred from source files: $DETECTED"
+              echo "old_package=$DETECTED" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # 最终默认值
+          DEFAULT="com.android.launcher2"
+          echo "⚠️  Could not detect package, using default: $DEFAULT"
+          echo "old_package=$DEFAULT" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Derive keystore password and create keystore
+      # ─────────────────────────────────────────────────────────────
+      # 3️⃣ 生成/准备 Keystore（确定性生成 + 敏感信息脱敏）
+      # ─────────────────────────────────────────────────────────────
+      - name: Generate deterministic keystore
         id: keystore
         run: |
           set -euo pipefail
           SEED="${{ github.event.inputs.keystore_seed }}"
-          if [ -z "$SEED" ]; then
+          
+          if [[ -z "$SEED" ]]; then
             SEED=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
-            echo "Generated random keystore_seed: $SEED"
+            echo "🎲 Generated random keystore_seed (first 16 chars): ${SEED:0:16}..."
           else
-            echo "Using provided keystore_seed (truncated): ${SEED:0:16}..."
+            echo "🔑 Using provided keystore_seed (first 16 chars): ${SEED:0:16}..."
           fi
+          
+          # 从 seed 派生密码（16字符十六进制）
           STOREPASS=$(echo -n "$SEED" | sha256sum | cut -c1-16)
-          KEYPASS=$(echo -n "key$SEED" | sha256sum | cut -c1-16)
-          ALIAS="androidkey"
-          KEYSTORE=release.keystore
-
-          keytool -genkeypair -v -storetype JKS -keystore "$KEYSTORE" -storepass "$STOREPASS" -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -keypass "$KEYPASS" -dname "CN=Android,O=Auto,OU=CI,C=US" || true
-
-          KEYSTORE_B64=$(base64 "$KEYSTORE" | tr -d '\n')
+          KEYPASS=$(echo -n "key:$SEED" | sha256sum | cut -c1-16)
+          ALIAS="ci-release-key"
+          KEYSTORE_PATH="release.keystore"
+          
+          # 生成 JKS keystore
+          keytool -genkeypair -v \
+            -storetype JKS \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$STOREPASS" \
+            -alias "$ALIAS" \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -keypass "$KEYPASS" \
+            -dname "CN=CI-Build, OU=Automation, O=GitHub-Actions, C=US" \
+            >/dev/null 2>&1
+          
+          # 🔐 脱敏：防止密码泄露到日志
+          echo "::add-mask::$STOREPASS"
+          echo "::add-mask::$KEYPASS"
+          echo "::add-mask::$SEED"
+          
+          # 输出供后续步骤使用（base64 编码用于 artifact 上传，可选）
+          KEYSTORE_B64=$(base64 -w0 "$KEYSTORE_PATH")
           echo "storepass=$STOREPASS" >> $GITHUB_OUTPUT
           echo "keypass=$KEYPASS" >> $GITHUB_OUTPUT
           echo "alias=$ALIAS" >> $GITHUB_OUTPUT
+          echo "keystore_path=$KEYSTORE_PATH" >> $GITHUB_OUTPUT
           echo "keystore_b64=$KEYSTORE_B64" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Replace package names, app label, version in sources
+      # ─────────────────────────────────────────────────────────────
+      # 4️⃣ 执行包名/应用标签/版本替换（安全 sed + 目录移动）
+      # ─────────────────────────────────────────────────────────────
+      - name: Replace package name, app label, and version info
+        env:
+          OLD_PACKAGE: ${{ steps.detect.outputs.old_package }}
+          NEW_PACKAGE: ${{ github.event.inputs.new_package }}
+          APP_LABEL: ${{ github.event.inputs.app_label }}
+          VERSION_NAME: ${{ github.event.inputs.version_name }}
+          VERSION_CODE: ${{ github.event.inputs.version_code }}
         run: |
           set -euo pipefail
-          OLD="${{ steps.detect.outputs.old_package }}"
-          NEW="${{ github.event.inputs.new_package }}"
-          if [ -z "$NEW" ]; then NEW="com.whty.ebrowser"; fi
-          APP_LABEL="${{ github.event.inputs.app_label }}"
-          if [ -z "$APP_LABEL" ]; then APP_LABEL="狼分身"; fi
-          VER_NAME="${{ github.event.inputs.version_name }}"
-          VER_CODE="${{ github.event.inputs.version_code }}"
-
-          echo "Replacing package: $OLD -> $NEW"
-
-          OLD_ESC=$(printf '%s' "$OLD" | sed 's/[\\/&]/\\\\&/g; s/\\./\\\\./g')
-
-          find . -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' -o -name '*.gradle' -o -name '*.properties' -o -name 'AndroidManifest.xml' \) -print0 \
-            | xargs -0 sed -i "s/${OLD_ESC}/${NEW}/g" || true
-
-          OLD_DIR="app/src/main/java/$(echo $OLD | tr '.' '/')"
-          NEW_DIR="app/src/main/java/$(echo $NEW | tr '.' '/')"
-          if [ -d "$OLD_DIR" ]; then
-            mkdir -p "$(dirname "$NEW_DIR")"
-            echo "Moving $OLD_DIR -> $NEW_DIR"
-            mv "$OLD_DIR" "$NEW_DIR" || true
-          else
-            echo "No source dir $OLD_DIR to move"
-          fi
-
-          if [ -f app/build.gradle ]; then
+          
+          # 应用默认值
+          : "${NEW_PACKAGE:=com.whty.ebrowser}"
+          : "${APP_LABEL:=狼分身}"
+          : "${VERSION_NAME:=2.0.1.241130_BYOD}"
+          : "${VERSION_CODE:=14}"
+          
+          OLD="$OLD_PACKAGE"
+          NEW="$NEW_PACKAGE"
+          
+          echo "🔄 Replacing: $OLD → $NEW"
+          echo "🏷️  App label: $APP_LABEL"
+          echo "📦 Version: $VERSION_NAME ($VERSION_CODE)"
+          
+          # 🔧 安全转义：用于 sed 正则替换（转义 . [ ] * ^ $ + ? { } | \ /）
+          # 注意：先转义反斜杠，再转义其他字符
+          OLD_ESC=$(printf '%s' "$OLD" | sed 's/[[\.*^$()+?{|\\]/\\&/g; s/\//\\\//g')
+          
+          # 📁 替换源码文件中的包名（排除 build/ 目录，使用 -exec 避免 xargs 兼容性问题）
+          find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' \) \
+            ! -path '*/build/*' \
+            -exec sed -i "s/${OLD_ESC}/${NEW}/g" {} + || true
+          
+          # 📁 替换 build.gradle 中的 applicationId / version
+          if [[ -f "app/build.gradle" ]]; then
             sed -i "s/applicationId[[:space:]]*\"[^\"]*\"/applicationId \"$NEW\"/g" app/build.gradle || true
-            sed -i "s/versionName[[:space:]]*\"[^\"]*\"/versionName \"$VER_NAME\"/g" app/build.gradle || true
-            sed -i "s/versionCode[[:space:]]*[0-9]*/versionCode $VER_CODE/g" app/build.gradle || true
+            sed -i "s/versionName[[:space:]]*\"[^\"]*\"/versionName \"$VERSION_NAME\"/g" app/build.gradle || true
+            sed -i "s/versionCode[[:space:]]*[0-9]\+/versionCode $VERSION_CODE/g" app/build.gradle || true
           fi
-
+          
+          # 📁 替换 AndroidManifest.xml 中的 package 和 label
           MANIFEST="app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            sed -i "s/\(<manifest[^>]*package=\)\"[^\"]*\"/\1\"$NEW\"/g" "$MANIFEST" || true
-            sed -i "s/\(android:label=\)\"[^\"]*\"/\1\"$APP_LABEL\"/g" "$MANIFEST" || true
+          if [[ -f "$MANIFEST" ]]; then
+            # 替换 package 属性（保留 manifest 标签其他内容）
+            sed -i -E "s/(<manifest[^>]*package=\")([^\"]+)\"/\1${NEW}\"/g" "$MANIFEST" || true
+            # 替换 application 的 android:label
+            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_LABEL\"/g" "$MANIFEST" || true
           fi
-
-          echo "Replacement complete. Please review changes locally if needed."
-        shell: bash
-
-      - name: Run Gradle build (use wrapper if present)
-        env:
-          STOREPASS: ${{ steps.keystore.outputs.storepass }}
-          KEYPASS: ${{ steps.keystore.outputs.keypass }}
-          ALIAS: ${{ steps.keystore.outputs.alias }}
-        run: |
-          set -euo pipefail
-          TASK="${{ github.event.inputs.gradle_task }}"
-          if [ -z "$TASK" ]; then TASK="app:assembleRelease"; fi
-          echo "Gradle task: $TASK"
-
-          if [ -f ./gradlew ]; then
-            chmod +x ./gradlew
-            ./gradlew $TASK -Pandroid.injected.signing.store.file=$(pwd)/release.keystore -Pandroid.injected.signing.store.password=$STOREPASS -Pandroid.injected.signing.key.alias=$ALIAS -Pandroid.injected.signing.key.password=$KEYPASS --no-daemon || true
+          
+          # 📁 移动 Java/Kotlin 源码目录结构：com/example/app → com/whty/ebrowser
+          OLD_PATH="app/src/main/java/${OLD//./\/}"
+          NEW_PATH="app/src/main/java/${NEW//./\/}"
+          
+          if [[ -d "$OLD_PATH" ]]; then
+            if [[ ! -d "$NEW_PATH" ]]; then
+              mkdir -p "$(dirname "$NEW_PATH")"
+              echo "📦 Moving source dir: $OLD_PATH → $NEW_PATH"
+              mv "$OLD_PATH" "$NEW_PATH"
+            else
+              echo "⚠️  Target dir already exists: $NEW_PATH, skipping move"
+            fi
           else
-            sudo apt-get update -y
-            sudo apt-get install -y gradle
-            gradle wrapper || true
-            ./gradlew $TASK -Pandroid.injected.signing.store.file=$(pwd)/release.keystore -Pandroid.injected.signing.store.password=$STOREPASS -Pandroid.injected.signing.key.alias=$ALIAS -Pandroid.injected.signing.key.password=$KEYPASS --no-daemon || true
+            echo "ℹ️  Source dir not found: $OLD_PATH (may already be renamed or use different structure)"
           fi
+          
+          echo "✅ Replacement completed. Review diff locally if needed."
         shell: bash
 
-      - name: Find APKs and sign if necessary
+      # ─────────────────────────────────────────────────────────────
+      # 5️⃣ 配置 Gradle 签名参数（通过 gradle.properties 注入）
+      # ─────────────────────────────────────────────────────────────
+      - name: Configure Gradle signing properties
         env:
           STOREPASS: ${{ steps.keystore.outputs.storepass }}
           KEYPASS: ${{ steps.keystore.outputs.keypass }}
           ALIAS: ${{ steps.keystore.outputs.alias }}
-          BUILD_TOOLS: ${{ env.ANDROID_SDK_ROOT }}/build-tools/33.0.2
+          KEYSTORE_PATH: ${{ steps.keystore.outputs.keystore_path }}
         run: |
           set -euo pipefail
-          mkdir -p out_apks
-          echo "Looking for APKs under app/build/outputs"
-          find app -type f -name '*.apk' -print -exec bash -lc 'APK="$0"; echo "Found $APK"; BASENAME=$(basename "$APK"); OUT="out_apks/${BASENAME%.*}-signed.apk"; "$BUILD_TOOLS/apksigner" sign --ks release.keystore --ks-key-alias "$ALIAS" --ks-pass pass:$STOREPASS --key-pass pass:$KEYPASS --out "$OUT" "$APK" || true' {} \;
-          ls -la out_apks || true
+          
+          # 创建/追加到 gradle.properties（项目根目录）
+          cat >> gradle.properties << EOF
+          
+          # 🔐 CI-injected signing config (auto-generated, do not commit)
+          android.injected.signing.store.file=$(pwd)/$KEYSTORE_PATH
+          android.injected.signing.store.password=$STOREPASS
+          android.injected.signing.key.alias=$ALIAS
+          android.injected.signing.key.password=$KEYPASS
+          EOF
+          
+          echo "✅ Gradle signing properties configured"
         shell: bash
 
-      - name: Upload built APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: built-apks
-          path: out_apks/
-
-      - name: Output keystore (base64) and passwords
+      # ─────────────────────────────────────────────────────────────
+      # 6️⃣ 执行 Gradle 构建
+      # ─────────────────────────────────────────────────────────────
+      - name: Build APK with Gradle
+        env:
+          GRADLE_TASK: ${{ github.event.inputs.gradle_task }}
         run: |
-          echo "keystore_base64=${{ steps.keystore.outputs.keystore_b64 }}"
-          echo "storepass=${{ steps.keystore.outputs.storepass }}"
-          echo "keypass=${{ steps.keystore.outputs.keypass }}"
+          set -euo pipefail
+          TASK="${GRADLE_TASK:-app:assembleRelease}"
+          echo "🚀 Running Gradle task: $TASK"
+          
+          if [[ -x "./gradlew" ]]; then
+            ./gradlew "$TASK" --no-daemon --stacktrace
+          else
+            echo "⚠️  gradlew not found, installing Gradle..."
+            sudo apt-get install -y gradle
+            gradle wrapper --gradle-version 8.5
+            ./gradlew "$TASK" --no-daemon --stacktrace
+          fi
         shell: bash
+
+      # ─────────────────────────────────────────────────────────────
+      # 7️⃣ 签名 APK（使用 apksigner 后处理，更可靠）
+      # ─────────────────────────────────────────────────────────────
+      - name: Sign APKs with apksigner
+        env:
+          STOREPASS: ${{ steps.keystore.outputs.storepass }}
+          KEYPASS: ${{ steps.keystore.outputs.keypass }}
+          ALIAS: ${{ steps.keystore.outputs.alias }}
+          KEYSTORE_PATH: ${{ steps.keystore.outputs.keystore_path }}
+          API_LEVEL: ${{ inputs.api_level }}
+        run: |
+          set -euo pipefail
+          
+          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/33.0.2"
+          mkdir -p out_apks
+          
+          # 查找未签名/调试签名的 APK（常见输出路径）
+          APK_PATTERN="app/build/outputs/**/*-unsigned.apk app/build/outputs/**/unsigned/*.apk app/build/outputs/apk/**/*.apk"
+          
+          FOUND=0
+          for apk in $APK_PATTERN; do
+            [[ -f "$apk" ]] || continue
+            [[ "$apk" == *"-signed.apk" ]] && continue  # 跳过已签名的
+            [[ "$apk" == *"debug"* ]] && continue        # 跳过 debug 包（可选）
+            
+            FOUND=1
+            BASENAME=$(basename "$apk" .apk)
+            OUT_APK="out_apks/${BASENAME}-signed.apk"
+            
+            echo "✍️  Signing: $apk → $OUT_APK"
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks "$KEYSTORE_PATH" \
+              --ks-key-alias "$ALIAS" \
+              --ks-pass "pass:$STOREPASS" \
+              --key-pass "pass:$KEYPASS" \
+              --out "$OUT_APK" \
+              "$apk"
+              
+            # 验证签名（可选，失败不中断）
+            "$BUILD_TOOLS/apksigner" verify --verbose "$OUT_APK" || echo "⚠️  Verification warning for $OUT_APK"
+          done
+          
+          if [[ $FOUND -eq 0 ]]; then
+            echo "⚠️  No unsigned APKs found. Listing all APKs for debug:"
+            find app/build/outputs -name '*.apk' -type f || true
+          fi
+          
+          ls -lh out_apks/ || echo "ℹ️  out_apks/ is empty"
+        shell: bash
+
+      # ─────────────────────────────────────────────────────────────
+      # 8️⃣ 上传产物 + 输出信息（脱敏）
+      # ─────────────────────────────────────────────────────────────
+      - name: Upload signed APKs
+        uses: actions/upload-artifact@v4
+        if: hashFiles('out_apks/*.apk') != ''
+        with:
+          name: signed-apks-${{ github.run_number }}
+          path: out_apks/*.apk
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Output build summary (safe)
+        run: |
+          echo "✅ Build completed successfully!"
+          echo "📦 New package: ${{ github.event.inputs.new_package || 'com.whty.ebrowser' }}"
+          echo "🏷️  App label: ${{ github.event.inputs.app_label || '狼分身' }}"
+          echo "🔖 Version: ${{ github.event.inputs.version_name }} (${{ github.event.inputs.version_code }})"
+          echo ""
+          echo "📥 Download APKs from the 'Artifacts' section of this run."
+          echo ""
+          echo "🔐 Keystore info (for local verification):"
+          echo "   - Alias: ${{ steps.keystore.outputs.alias }}"
+          echo "   - Store password: ***MASKED***"
+          echo "   - Key password: ***MASKED***"
+          echo ""
+          echo "⚠️  For security, keystore base64 is NOT printed to logs."
+          echo "   If you need it, download the 'keystore-info' artifact (if enabled)."
+        shell: bash
+
+      # ─────────────────────────────────────────────────────────────
+      # 🔐 [可选] 上传 keystore 信息（加密 artifact，谨慎启用）
+      # ─────────────────────────────────────────────────────────────
+      # - name: Upload keystore info (encrypted, optional)
+      #   if: github.event.inputs.keystore_seed == ''  # 仅当随机生成时上传
+      #   run: |
+      #     mkdir -p keystore-info
+      #     echo "${{ steps.keystore.outputs.keystore_b64 }}" | base64 -d > keystore-info/release.keystore
+      #     cat > keystore-info/README.txt << EOF
+      #     ⚠️  SECURITY NOTICE ⚠️
+      #     This keystore was auto-generated for CI signing.
+      #     - Alias: ${{ steps.keystore.outputs.alias }}
+      #     - Store password: ${{ steps.keystore.outputs.storepass }}
+      #     - Key password: ${{ steps.keystore.outputs.keypass }}
+      #     Store these securely. Do NOT commit to version control.
+      #     EOF
+      #     echo "storepass=${{ steps.keystore.outputs.storepass }}" >> keystore-info/credentials.txt
+      #     echo "keypass=${{ steps.keystore.outputs.keypass }}" >> keystore-info/credentials.txt
+      #   shell: bash
+      #
+      # - uses: actions/upload-artifact@v4
+      #   if: github.event.inputs.keystore_seed == ''
+      #   with:
+      #     name: keystore-info-DO-NOT-SHARE
+      #     path: keystore-info/
+      #     retention-days: 1
+      #     if-no-files-found: ignore
