@@ -49,10 +49,6 @@ jobs:
     permissions:
       contents: read
 
-    # ❌ 删掉这个 job 级别的 env，runner.temp 在这里不可用
-    # env:
-    #   ANDROID_SDK_ROOT: "${{ runner.temp }}/Android/Sdk"
-
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@v4"
@@ -66,15 +62,32 @@ jobs:
           java-version: "11"
           cache: "gradle"
 
-      - name: "Setup Android SDK"
+      # ✅ 修复 1：只让 Action 安装 cmdline-tools，不传 packages
+      - name: "Setup Android SDK (cmdline-tools only)"
         id: "setup-android"
         uses: "android-actions/setup-android@v3"
         with:
           cmdline-tools-version: "9477386"
-          packages: |
-            platform-tools
-            platforms;android-${{ inputs.api_level }}
-            build-tools;33.0.2
+
+      # ✅ 修复 2：手动调用 sdkmanager，确保每个包名独立传递
+      - name: "Install Android SDK packages"
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          
+          if [[ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          elif [[ -x "$SDK_ROOT/cmdline-tools/9.0/bin/sdkmanager" ]]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/9.0/bin/sdkmanager"
+          else
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/$({ ls -1 $SDK_ROOT/cmdline-tools | head -n1; })/bin/sdkmanager"
+          fi
+          
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-${{ inputs.api_level }}" \
+            "build-tools;33.0.2"
 
       - name: "Install utilities"
         run: |
@@ -233,9 +246,8 @@ jobs:
           KFILE: "${{ steps.keystore.outputs.keystore }}"
         run: |
           set -euo pipefail
-          # ✅ setup-android 已经自动设置了 ANDROID_SDK_ROOT，直接用就行
-          # 如果实在不放心，也可以用 $RUNNER_TEMP（这是 shell 环境变量，不是 YAML 表达式）
-          BT="${ANDROID_SDK_ROOT:-$RUNNER_TEMP/Android/Sdk}/build-tools/33.0.2"
+          # setup-android 会自动导出 ANDROID_SDK_ROOT，这里加个默认路径兜底
+          BT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/build-tools/33.0.2"
           mkdir -p out_apks
           
           shopt -s globstar nullglob
