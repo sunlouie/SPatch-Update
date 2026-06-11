@@ -55,11 +55,164 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: "Set up JDK 17"
+      # ==========================================
+      # 核心修复步骤：自动检测环境、修复编码、对齐版本
+      # ==========================================
+      - name: "Detect project requirements and auto-fix compatibility"
+        id: "detect_fix"
+        run: |
+          set -euo pipefail
+          python3 << 'PYEOF'
+import os
+import re
+import sys
+
+gradle_ver = "7.5" # 默认 Gradle 版本
+agp_ver = None
+
+# 1. 读取项目指定的 Gradle 版本
+props_file = "gradle/wrapper/gradle-wrapper.properties"
+if os.path.exists(props_file):
+    with open(props_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            if "distributionUrl" in line:
+                m = re.search(r'gradle-([\d.]+)', line)
+                if m:
+                    gradle_ver = m.group(1)
+                    break
+                    
+print(f"Detected Gradle version: {gradle_ver}")
+
+# 2. 根据 Gradle 版本推导兼容的 JDK 和 AGP 版本
+try:
+    gradle_major = int(gradle_ver.split('.')[0])
+except:
+    gradle_major = 7
+
+if gradle_major >= 8:
+    target_jdk = "17"
+    target_agp = "8.1.4"
+elif gradle_major >= 7:
+    if gradle_ver >= "7.3":
+        target_jdk = "17"
+        target_agp = "7.4.2"
+    else:
+        target_jdk = "11"
+        target_agp = "7.2.2"
+else:
+    target_jdk = "11"
+    target_agp = "4.2.2"
+    
+# 3. 自动清理所有 Gradle 文件的 BOM 头 (防止 Gradle 解析第一行时崩溃)
+for root, dirs, files in os.walk('.'):
+    if 'build' in root or '.gradle' in root or '.git' in root:
+        continue
+    for file in files:
+        if file.endswith('.gradle') or file.endswith('.gradle.kts'):
+            filepath = os.path.join(root, file)
+            try:
+                with open(filepath, 'r', encoding='utf-8-sig') as f:
+                    content = f.read()
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            except Exception:
+                pass
+                
+# 4. 尝试读取项目现有的 AGP 版本
+build_files = ["build.gradle", "build.gradle.kts"]
+for bf in build_files:
+    if os.path.exists(bf):
+        with open(bf, 'r', encoding='utf-8') as f:
+            content = f.read()
+        m = re.search(r"com\.android\.tools\.build:gradle:([\d.]+)", content)
+        if m:
+            agp_ver = m.group(1)
+            
+settings_files = ["settings.gradle", "settings.gradle.kts"]
+for sf in settings_files:
+    if os.path.exists(sf):
+        with open(sf, 'r', encoding='utf-8') as f:
+            content = f.read()
+        m = re.search(r"id\s*\(?\s*['\"]com\.android\.application['\"]\s*\)?\s+version\s+['\"]([\d.]+)['\"]", content)
+        if m:
+            agp_ver = m.group(1)
+            
+print(f"Detected AGP version: {agp_ver}")
+
+# 5. 如果现有 AGP 版本与推导的 JDK 冲突，进行动态调整
+if agp_ver:
+    try:
+        agp_major = int(agp_ver.split('.')[0])
+        if agp_major >= 8 and target_jdk == "11":
+            target_jdk = "17" # 老 JDK 跑不动 AGP 8+，强制升级 JDK
+        elif agp_major < 7 and target_jdk == "17":
+            target_jdk = "11" # 新 JDK 跑不动老 AGP，强制降级 JDK 保平安
+            target_agp = agp_ver 
+    except:
+        pass
+        
+print(f"Final target JDK: {target_jdk}")
+print(f"Final target AGP: {target_agp}")
+
+# 6. 自动修复 build.gradle / build.gradle.kts，确保 AGP 版本正确且存在
+for bf in build_files:
+    if os.path.exists(bf):
+        is_kts = bf.endswith('.kts')
+        with open(bf, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        pattern = r"com\.android\.tools\.build:gradle:[\d\.]+"
+        if re.search(pattern, content):
+            new_content = re.sub(pattern, f"com.android.tools.build:gradle:{target_agp}", content)
+        else:
+            dep_pattern = r"(buildscript\s*\{[^}]*dependencies\s*\{)"
+            if re.search(dep_pattern, content, re.DOTALL):
+                if is_kts:
+                    inject_str = f'\n        classpath("com.android.tools.build:gradle:{target_agp}")'
+                else:
+                    inject_str = f"\n        classpath 'com.android.tools.build:gradle:{target_agp}'"
+                new_content = re.sub(dep_pattern, f"\\1{inject_str}", content, count=1)
+            else:
+                if is_kts:
+                    inject = f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath(\"com.android.tools.build:gradle:{target_agp}\")\n    }}\n}}\n"
+                else:
+                    inject = f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath 'com.android.tools.build:gradle:{target_agp}'\n    }}\n}}\n"
+                new_content = inject + content
+                
+        with open(bf, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+
+# 7. 自动修复 settings.gradle 的 plugins DSL
+for sf in settings_files:
+    if os.path.exists(sf):
+        with open(sf, 'r', encoding='utf-8') as f:
+            content = f.read()
+        plugin_pattern = r"(id\s*\(?\s*['\"]com\.android\.application['\"]\s*\)?\s+version\s+['\"])[\d\.]+(['\"])"
+        
+        new_content = content
+        if re.search(plugin_pattern, content):
+            new_content = re.sub(plugin_pattern, f"\\g<1>{target_agp}\\g<2>", content)
+            
+        if new_content != content:
+            with open(sf, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+# 输出变量供后续步骤使用
+with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+    f.write(f"jdk_version={target_jdk}\n")
+    f.write(f"agp_version={target_agp}\n")
+    f.write(f"gradle_version={gradle_ver}\n")
+PYEOF
+        shell: bash
+
+      # ==========================================
+      # 使用动态检测到的 JDK 版本
+      # ==========================================
+      - name: "Set up JDK"
         uses: "actions/setup-java@v4"
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "${{ steps.detect_fix.outputs.jdk_version }}"
           cache: "gradle"
 
       - name: "Install utilities"
@@ -152,192 +305,6 @@ jobs:
           OLD="$OLD_PKG"
           NEW="$NEW_PKG"
           
-          # 使用更严谨的转义规则，防止特殊字符导致 sed 崩溃
           OLD_ESC=$(printf '%s' "$OLD" | sed -e 's/[\/&]/\\&/g')
           
-          find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name '*.xml' \) \
-            ! -path '*/build/*' \
-            -exec sed -i "s/${OLD_ESC}/${NEW}/g" {} + || true
-          
-          if [[ -f "app/build.gradle" ]]; then
-            sed -i "s/applicationId[[:space:]]*\"[^\"]*\"/applicationId \"$NEW\"/g" app/build.gradle || true
-            sed -i "s/versionName[[:space:]]*\"[^\"]*\"/versionName \"$VER_NAME\"/g" app/build.gradle || true
-            sed -i "s/versionCode[[:space:]]*[0-9]\+/versionCode $VER_CODE/g" app/build.gradle || true
-          fi
-          
-          MANIFEST="app/src/main/AndroidManifest.xml"
-          if [[ -f "$MANIFEST" ]]; then
-            sed -i -E "s/(<manifest[^>]*package=\")([^\"]+)\"/\1${NEW}\"/g" "$MANIFEST" || true
-            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_LABEL\"/g" "$MANIFEST" || true
-          fi
-          
-          OLD_DIR="app/src/main/java/${OLD//./\/}"
-          NEW_DIR="app/src/main/java/${NEW//./\/}"
-          if [[ -d "$OLD_DIR" && ! -d "$NEW_DIR" ]]; then
-            mkdir -p "$(dirname "$NEW_DIR")"
-            mv "$OLD_DIR" "$NEW_DIR" || true
-          fi
-        shell: bash
-
-      - name: "Configure Gradle signing"
-        env:
-          SPASS: "${{ steps.keystore.outputs.storepass }}"
-          KPASS: "${{ steps.keystore.outputs.keypass }}"
-          KALIAS: "${{ steps.keystore.outputs.alias }}"
-          KFILE: "${{ steps.keystore.outputs.keystore }}"
-        run: |
-          set -euo pipefail
-          printf '%s\n' \
-            "android.injected.signing.store.file=$(pwd)/$KFILE" \
-            "android.injected.signing.store.password=$SPASS" \
-            "android.injected.signing.key.alias=$KALIAS" \
-            "android.injected.signing.key.password=$KPASS" \
-            >> gradle.properties
-        shell: bash
-
-      - name: "Install Android SDK components (robust)"
-        run: |
-          set -euo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          mkdir -p "$SDK_ROOT"
-          export ANDROID_SDK_ROOT="$SDK_ROOT"
-
-          if command -v sdkmanager >/dev/null 2>&1; then
-            SDKMANAGER=$(command -v sdkmanager)
-          elif [[ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]]; then
-            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          else
-            SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -n 1)
-          fi
-
-          if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
-            echo "sdkmanager not found. Downloading Android commandline tools..."
-            TMPDIR="$(mktemp -d)"
-            pushd "$TMPDIR"
-            CLI_ZIP="commandlinetools-linux-11076708_latest.zip"
-            wget -q "https://dl.google.com/android/repository/${CLI_ZIP}" -O "$CLI_ZIP"
-            unzip -q "$CLI_ZIP"
-            mkdir -p "$SDK_ROOT/cmdline-tools/latest"
-            mv cmdline-tools/* "$SDK_ROOT/cmdline-tools/latest/" 2>/dev/null || true
-            popd
-            rm -rf "$TMPDIR"
-            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          fi
-
-          if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
-            echo "Error: sdkmanager not found after install attempt!"
-            exit 1
-          fi
-
-          export PATH="$(dirname "$SDKMANAGER"):$PATH"
-          echo "Using sdkmanager: $SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses || true
-          
-          # 使用正确的 github.event.inputs 上下文获取 API 级别
-          API="${{ github.event.inputs.api_level }}"
-          "$SDKMANAGER" "platform-tools" "platforms;android-${API}" "build-tools;33.0.2" "platforms;android-33"
-        shell: bash
-
-      - name: "Verify gradle wrapper & versions (Auto-fix if missing)"
-        run: |
-          set -euo pipefail
-          if [[ -f "./gradlew" ]]; then
-            chmod +x ./gradlew
-            echo "Using committed gradlew"
-            ./gradlew --version
-          else
-            echo "gradlew not found — installing Gradle CLI and generating wrapper"
-            sudo apt-get update -y
-            sudo apt-get install -y wget unzip
-            
-            # 尝试从 properties 文件中智能提取项目指定的 Gradle 版本
-            GRADLE_VER="8.4"
-            if [[ -f "gradle/wrapper/gradle-wrapper.properties" ]]; then
-              DETECTED_VER=$(grep 'distributionUrl' gradle/wrapper/gradle-wrapper.properties | grep -o 'gradle-[0-9.]\+' | grep -o '[0-9.]\+' || true)
-              if [[ -n "$DETECTED_VER" ]]; then
-                GRADLE_VER="$DETECTED_VER"
-                echo "Detected Gradle version from properties: $GRADLE_VER"
-              fi
-            else
-              echo "No gradle-wrapper.properties found, using default Gradle version: $GRADLE_VER"
-            fi
-
-            # 下载并安装 Gradle
-            wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip -O /tmp/gradle.zip
-            sudo unzip -q /tmp/gradle.zip -d /opt/gradle
-            export PATH="/opt/gradle/gradle-${GRADLE_VER}/bin:$PATH"
-            
-            # 动态生成 wrapper
-            gradle wrapper --gradle-version "${GRADLE_VER}"
-            chmod +x ./gradlew
-            ./gradlew --version
-          fi
-        shell: bash
-
-      - name: "Build APK"
-        env:
-          TASK: "${{ github.event.inputs.gradle_task }}"
-        run: |
-          set -euo pipefail
-          GRADLE_TASK="${TASK:-app:assembleRelease}"
-          
-          mkdir -p build_logs
-          ./gradlew "$GRADLE_TASK" --no-daemon --stacktrace | tee build_logs/gradle_build.log || {
-            echo "❌ Build failed. Full stacktrace saved to build_logs/gradle_build.log"
-            exit 1
-          }
-        shell: bash
-
-      - name: "Upload build logs on failure"
-        if: failure()
-        uses: "actions/upload-artifact@v4"
-        with:
-          name: "build-logs"
-          path: "build_logs/"
-          retention-days: 3
-
-      - name: "Sign APKs"
-        env:
-          SPASS: "${{ steps.keystore.outputs.storepass }}"
-          KPASS: "${{ steps.keystore.outputs.keypass }}"
-          KALIAS: "${{ steps.keystore.outputs.alias }}"
-          KFILE: "${{ steps.keystore.outputs.keystore }}"
-        run: |
-          set -euo pipefail
-          
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          APKSIGNER=$(find "$SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -n 1)
-          
-          if [[ -z "$APKSIGNER" ]]; then
-            echo "Error: apksigner not found in build-tools!"
-            exit 1
-          fi
-          
-          mkdir -p out_apks
-          shopt -s globstar nullglob
-          for apk in app/build/outputs/**/*-unsigned.apk app/build/outputs/**/unsigned/*.apk; do
-            [[ -f "$apk" ]] || continue
-            [[ "$apk" == *"-signed.apk" || "$apk" == *"debug"* ]] && continue
-            
-            base=$(basename "$apk" .apk)
-            out="out_apks/${base}-signed.apk"
-            
-            "$APKSIGNER" sign \
-              --ks "$KFILE" \
-              --ks-key-alias "$KALIAS" \
-              --ks-pass "pass:$SPASS" \
-              --key-pass "pass:$KPASS" \
-              --out "$out" \
-              "$apk"
-          done
-        shell: bash
-
-      - name: "Upload APKs"
-        uses: "actions/upload-artifact@v4"
-        if: "hashFiles('out_apks/*.apk') != ''"
-        with:
-          name: "signed-apks"
-          path: "out_apks/*.apk"
-          retention-days: 7
-          if-no-files-found: warn
+          find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name
