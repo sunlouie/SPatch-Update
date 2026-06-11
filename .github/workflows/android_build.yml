@@ -50,164 +50,18 @@ jobs:
       contents: read
 
     steps:
-      # ----------------------------------------------------------
-      # 1. Checkout
-      # ----------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ----------------------------------------------------------
-      # 2. Detect Gradle / AGP / JDK requirements and auto-fix
-      # ----------------------------------------------------------
       - name: Detect project requirements and auto-fix compatibility
         id: detect_fix
-        shell: bash
         run: |
-          set -euo pipefail
+          echo "aW1wb3J0IG9zLCByZSwgc3lzCgpncmFkbGVfdmVyID0gIjcuNSIKYWdwX3ZlciA9IE5vbmUKCnByb3BzX2ZpbGUgPSAiZ3JhZGxlL3dyYXBwZXIvZ3JhZGxlLXdyYXBwZXIucHJvcGVydGllcyIKaWYgb3MucGF0aC5leGlzdHMocHJvcHNfZmlsZSk6CiAgICB3aXRoIG9wZW4ocHJvcHNfZmlsZSwgInIiLCBlbmNvZGluZz0idXRmLTgiKSBhcyBmOgogICAgICAgIGZvciBsaW5lIGluIGY6CiAgICAgICAgICAgIGlmICJkaXN0cmlidXRpb25VcmwiIGluIGxpbmU6CiAgICAgICAgICAgICAgICBtID0gcmUuc2VhcmNoKHIiZ3JhZGxlLShbXGQuXSspIiwgbGluZSkKICAgICAgICAgICAgICAgIGlmIG06CiAgICAgICAgICAgICAgICAgICAgZ3JhZGxlX3ZlciA9IG0uZ3JvdXAoMSkKICAgICAgICAgICAgICAgICAgICBicmVhawoKcHJpbnQoZiJEZXRlY3RlZCBHcmFkbGUgdmVyc2lvbjoge2dyYWRsZV92ZXJ9IikKCnRyeToKICAgIGdyYWRsZV9tYWpvciA9IGludChncmFkbGVfdmVyLnNwbGl0KCIuIilbMF0pCmV4Y2VwdCBFeGNlcHRpb246CiAgICBncmFkbGVfbWFqb3IgPSA3CgppZiBncmFkbGVfbWFqb3IgPj0gODoKICAgIHRhcmdldF9qZGsgPSAiMTciCiAgICB0YXJnZXRfYWdwID0gIjguMS40IgplbGlmIGdyYWRsZV92ZXIgPj0gIjcuMyI6CiAgICB0YXJnZXRfamRrID0gIjE3IgogICAgdGFyZ2V0X2FncCA9ICI3LjQuMiIKZWxzZToKICAgIHRhcmdldF9qZGsgPSAiMTEiCiAgICB0YXJnZXRfYWdwID0gIjcuMi4yIgoKZm9yIHJvb3QsIGRpcnMsIGZpbGVzIGluIG9zLndhbGsoIi4iKToKICAgIGRpcnNbOl0gPSBbZCBmb3IgZCBpbiBkaXJzIGlmIGQgbm90IGluICgiYnVpbGQiLCAiLmdyYWRsZSIsICIuZ2l0IildCiAgICBmb3IgZm5hbWUgaW4gZmlsZXM6CiAgICAgICAgaWYgZm5hbWUuZW5kc3dpdGgoIi5ncmFkbGUiKSBvciBmbmFtZS5lbmRzd2l0aCgiLmdyYWRsZS5rdHMiKToKICAgICAgICAgICAgZnAgPSBvcy5wYXRoLmpvaW4ocm9vdCwgZm5hbWUpCiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIHdpdGggb3BlbihmcCwgInIiLCBlbmNvZGluZz0idXRmLTgtc2lnIikgYXMgZjoKICAgICAgICAgICAgICAgICAgICBjb250ZW50ID0gZi5yZWFkKCkKICAgICAgICAgICAgICAgIHdpdGggb3BlbihmcCwgInciLCBlbmNvZGluZz0idXRmLTgiKSBhcyBmOgogICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY29udGVudCkKICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgICAgIHBhc3MKCmZvciBiZiBpbiAoImJ1aWxkLmdyYWRsZSIsICJidWlsZC5ncmFkbGUua3RzIik6CiAgICBpZiBvcy5wYXRoLmV4aXN0cyhiZik6CiAgICAgICAgd2l0aCBvcGVuKGJmLCAiciIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICAgICAgICAgIGMgPSBmLnJlYWQoKQogICAgICAgIG0gPSByZS5zZWFyY2gociJjb21cLmFuZHJvaWRcLnRvb2xzXC5idWlsZDpncmFkbGU6KFtcZC5dKykiLCBjKQogICAgICAgIGlmIG06CiAgICAgICAgICAgIGFncF92ZXIgPSBtLmdyb3VwKDEpCgpmb3Igc2YgaW4gKCJzZXR0aW5ncy5ncmFkbGUiLCAic2V0dGluZ3MuZ3JhZGxlLmt0cyIpOgogICAgaWYgb3MucGF0aC5leGlzdHMoc2YpOgogICAgICAgIHdpdGggb3BlbihzZiwgInIiLCBlbmNvZGluZz0idXRmLTgiKSBhcyBmOgogICAgICAgICAgICBjID0gZi5yZWFkKCkKICAgICAgICBtID0gcmUuc2VhcmNoKAogICAgICAgICAgICByJ2lkXHMqXCg/XHMqW1wnIl1jb21cLmFuZHJvaWRcLmFwcGxpY2F0aW9uW1wnIl1ccypcKT9ccyt2ZXJzaW9uXHMrW1wnIl0oW1xkLl0rKVtcJyJdJywgYwogICAgICAgICkKICAgICAgICBpZiBtOgogICAgICAgICAgICBhZ3BfdmVyID0gbS5ncm91cCgxKQoKcHJpbnQoZiJEZXRlY3RlZCBBR1AgdmVyc2lvbjoge2FncF92ZXJ9IikKCmlmIGFncF92ZXI6CiAgICB0cnk6CiAgICAgICAgYWdwX21ham9yID0gaW50KGFncF92ZXIuc3BsaXQoIi4iKVswXSkKICAgICAgICBpZiBhZ3BfbWFqb3IgPj0gOCBhbmQgdGFyZ2V0X2pkayA9PSAiMTEiOgogICAgICAgICAgICB0YXJnZXRfamRrID0gIjE3IgogICAgICAgIGVsaWYgYWdwX21ham9yIDwgNyBhbmQgdGFyZ2V0X2pkayA9PSAiMTciOgogICAgICAgICAgICB0YXJnZXRfamRrID0gIjExIgogICAgICAgICAgICB0YXJnZXRfYWdwID0gYWdwX3ZlcgogICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICBwYXNzCgpwcmludChmIkZpbmFsIHRhcmdldCBKREsgOiB7dGFyZ2V0X2pka30iKQpwcmludChmIkZpbmFsIHRhcmdldCBBR1AgOiB7dGFyZ2V0X2FncH0iKQoKZm9yIGJmIGluICgiYnVpbGQuZ3JhZGxlIiwgImJ1aWxkLmdyYWRsZS5rdHMiKToKICAgIGlmIG5vdCBvcy5wYXRoLmV4aXN0cyhiZik6CiAgICAgICAgY29udGludWUKICAgIGlzX2t0cyA9IGJmLmVuZHN3aXRoKCIua3RzIikKICAgIHdpdGggb3BlbihiZiwgInIiLCBlbmNvZGluZz0idXRmLTgiKSBhcyBmOgogICAgICAgIGNvbnRlbnQgPSBmLnJlYWQoKQogICAgcGF0dGVybiA9IHIiY29tXC5hbmRyb2lkXC50b29sc1wuYnVpbGQ6Z3JhZGxlOltcZFxcLl0rIiAgCiAgICBpZiByZS5zZWFyY2gocGF0dGVybiwgY29udGVudCk6CiAgICAgICAgbmV3X2NvbnRlbnQgPSByZS5zdWIocGF0dGVybiwgZiJjb20uYW5kcm9pZC50b29scy5idWlsZDpncmFkbGU6e3RhcmdldF9hZ3B9IiwgY29udGVudCkKICAgIGVsc2U6CiAgICAgICAgZGVwX3BhdCA9IHIiKGJ1aWxkc2NyaXB0XHMqXHtbXn1dKmRlcGVuZGVuY2llc1xzKlx7KSIKICAgICAgICBpZiByZS5zZWFyY2goZGVwX3BhdCwgY29udGVudCwgcmUuRE9UQUxMKToKICAgICAgICAgICAgaW5qZWN0ID0gKAogICAgICAgICAgICAgICAgZidcbiAgICAgICAgY2xhc3NwYXRoKCJjb20uYW5kcm9pZC50b29scy5idWlsZDpncmFkbGU6e3RhcmdldF9hZ3B9IiknCiAgICAgICAgICAgICAgICBpZiBpc19rdHMKICAgICAgICAgICAgICAgIGVsc2UgZiJcbiAgICAgICAgY2xhc3NwYXRoICdjb20uYW5kcm9pZC50b29scy5idWlsZDpncmFkbGU6e3RhcmdldF9hZ3B9JyIKICAgICAgICAgICAgKQogICAgICAgICAgICBuZXdfY29udGVudCA9IHJlLnN1YihkZXBfcGF0LCBmIlxcMXtpbmplY3R9IiwgY29udGVudCwgY291bnQ9MSkKICAgICAgICBlbHNlOgogICAgICAgICAgICBpZiBpc19rdHM6CiAgICAgICAgICAgICAgICBibG9jayA9IGYnXG5idWlsZHNjcmlwdCB7e1xuICAgIHJlcG9zaXRvcmllcyB7e1xuICAgICAgICBnb29nbGUoKVxuICAgICAgICBtYXZlbkNlbnRyYWwoKVxuICAgIH19XG4gICAgZGVwZW5kZW5jaWVzIHt7XG4gICAgICAgIGNsYXNzcGF0aCgiY29tLmFuZHJvaWQudG9vbHMuYnVpbGQ6Z3JhZGxlOnt0YXJnZXRfYWdwfSIpXG4gICAgfX1cbn19XG4nCiAgICAgICAgICAgIGVsc2U6CiAgICAgICAgICAgICAgICBibG9jayA9IGYiXG5idWlsZHNjcmlwdCB7e1xuICAgIHJlcG9zaXRvcmllcyB7e1xuICAgICAgICBnb29nbGUoKVxuICAgICAgICBtYXZlbkNlbnRyYWwoKVxuICAgIH19XG4gICAgZGVwZW5kZW5jaWVzIHt7XG4gICAgICAgIGNsYXNzcGF0aCAnY29tLmFuZHJvaWQudG9vbHMuYnVpbGQ6Z3JhZGxlOnt0YXJnZXRfYWdwfSdcbiAgICB9fVxufX1cbiIKICAgICAgICAgICAgbmV3X2NvbnRlbnQgPSBibG9jayArIGNvbnRlbnQKICAgIHdpdGggb3BlbihiZiwgInciLCBlbmNvZGluZz0idXRmLTgiKSBhcyBmOgogICAgICAgIGYud3JpdGUobmV3X2NvbnRlbnQpCgpmb3Igc2YgaW4gKCJzZXR0aW5ncy5ncmFkbGUiLCAic2V0dGluZ3MuZ3JhZGxlLmt0cyIpOgogICAgaWYgbm90IG9zLnBhdGguZXhpc3RzKHNmKToKICAgICAgICBjb250aW51ZQogICAgd2l0aCBvcGVuKHNmLCAiciIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICAgICAgY29udGVudCA9IGYucmVhZCgpCiAgICBwYXQgPSByJyhpZFxzKlwoP1xzKltcJyJdY29tXC5hbmRyb2lkXC5hcHBsaWNhdGlvbltcJyJdXHMqXCk/XHMrdmVyc2lvblxzK1tcJyJdKVtcZFxcLl0rKFtcJyJdKSAnCiAgICBuZXdfY29udGVudCA9IHJlLnN1YihwYXQsIGYiXFxnPDE+e3RhcmdldF9hZ3B9XFxnPDI+IiwgY29udGVudCkKICAgIGlmIG5ld19jb250ZW50ICE9IGNvbnRlbnQ6CiAgICAgICAgd2l0aCBvcGVuKHNmLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICAgICAgICAgIGYud3JpdGUobmV3X2NvbnRlbnQpCgpvdXQgPSBvcy5lbnZpcm9uWyJHSVRIVUJfT1VUUFVUIl0Kd2l0aCBvcGVuKG91dCwgImEiKSBhcyBmOgogICAgZi53cml0ZShmImpka192ZXJzaW9uPXt0YXJnZXRfamRrfVxuIikKICAgIGYud3JpdGUoZiJhZ3BfdmVyc2lvbj17dGFyZ2V0X2FncH1cbiIpCiAgICBmLndyaXRlKGYiZ3JhZGxlX3ZlcnNpb249e2dyYWRsZV92ZXJ9XG4iKQoKcHJpbnQoIkNvbXBhdGliaWxpdHkgYXV0by1maXggY29tcGxldGUuIikK" | base64 -d > /tmp/detect_fix.py
+          python3 /tmp/detect_fix.py
 
-          python3 - <<'PYEOF'
-import os, re, sys
-
-gradle_ver = "7.5"
-agp_ver = None
-
-# --- Read wrapper Gradle version ---
-props_file = "gradle/wrapper/gradle-wrapper.properties"
-if os.path.exists(props_file):
-    with open(props_file, "r", encoding="utf-8") as f:
-        for line in f:
-            if "distributionUrl" in line:
-                m = re.search(r"gradle-([\d.]+)", line)
-                if m:
-                    gradle_ver = m.group(1)
-                    break
-
-print(f"Detected Gradle version: {gradle_ver}")
-
-try:
-    gradle_major = int(gradle_ver.split(".")[0])
-except Exception:
-    gradle_major = 7
-
-# --- Derive compatible JDK + AGP ---
-if gradle_major >= 8:
-    target_jdk = "17"
-    target_agp = "8.1.4"
-elif gradle_ver >= "7.3":
-    target_jdk = "17"
-    target_agp = "7.4.2"
-else:
-    target_jdk = "11"
-    target_agp = "7.2.2"
-
-# --- Strip BOM from all Gradle files ---
-for root, dirs, files in os.walk("."):
-    dirs[:] = [d for d in dirs if d not in ("build", ".gradle", ".git")]
-    for fname in files:
-        if fname.endswith(".gradle") or fname.endswith(".gradle.kts"):
-            fp = os.path.join(root, fname)
-            try:
-                with open(fp, "r", encoding="utf-8-sig") as f:
-                    content = f.read()
-                with open(fp, "w", encoding="utf-8") as f:
-                    f.write(content)
-            except Exception:
-                pass
-
-# --- Read existing AGP from project files ---
-for bf in ("build.gradle", "build.gradle.kts"):
-    if os.path.exists(bf):
-        with open(bf, "r", encoding="utf-8") as f:
-            c = f.read()
-        m = re.search(r"com\.android\.tools\.build:gradle:([\d.]+)", c)
-        if m:
-            agp_ver = m.group(1)
-
-for sf in ("settings.gradle", "settings.gradle.kts"):
-    if os.path.exists(sf):
-        with open(sf, "r", encoding="utf-8") as f:
-            c = f.read()
-        m = re.search(
-            r'id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?\s+version\s+[\'"]([\d.]+)[\'"]', c
-        )
-        if m:
-            agp_ver = m.group(1)
-
-print(f"Detected AGP version: {agp_ver}")
-
-# --- Reconcile JDK with detected AGP ---
-if agp_ver:
-    try:
-        agp_major = int(agp_ver.split(".")[0])
-        if agp_major >= 8 and target_jdk == "11":
-            target_jdk = "17"
-        elif agp_major < 7 and target_jdk == "17":
-            target_jdk = "11"
-            target_agp = agp_ver
-    except Exception:
-        pass
-
-print(f"Final target JDK : {target_jdk}")
-print(f"Final target AGP : {target_agp}")
-
-# --- Patch root build.gradle to ensure AGP classpath ---
-for bf in ("build.gradle", "build.gradle.kts"):
-    if not os.path.exists(bf):
-        continue
-    is_kts = bf.endswith(".kts")
-    with open(bf, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    pattern = r"com\.android\.tools\.build:gradle:[\d\.]+"
-    if re.search(pattern, content):
-        new_content = re.sub(pattern, f"com.android.tools.build:gradle:{target_agp}", content)
-    else:
-        dep_pat = r"(buildscript\s*\{[^}]*dependencies\s*\{)"
-        if re.search(dep_pat, content, re.DOTALL):
-            inject = (
-                f'\n        classpath("com.android.tools.build:gradle:{target_agp}")'
-                if is_kts
-                else f"\n        classpath 'com.android.tools.build:gradle:{target_agp}'"
-            )
-            new_content = re.sub(dep_pat, f"\\1{inject}", content, count=1)
-        else:
-            block = (
-                f'\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath("com.android.tools.build:gradle:{target_agp}")\n    }}\n}}\n'
-                if is_kts
-                else f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath 'com.android.tools.build:gradle:{target_agp}'\n    }}\n}}\n"
-            )
-            new_content = block + content
-
-    with open(bf, "w", encoding="utf-8") as f:
-        f.write(new_content)
-
-# --- Patch settings.gradle plugin version ---
-for sf in ("settings.gradle", "settings.gradle.kts"):
-    if not os.path.exists(sf):
-        continue
-    with open(sf, "r", encoding="utf-8") as f:
-        content = f.read()
-    pat = r'(id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?\s+version\s+[\'"])[\d\.]+([\'"])'
-    new_content = re.sub(pat, f"\\g<1>{target_agp}\\g<2>", content)
-    if new_content != content:
-        with open(sf, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-# --- Write outputs ---
-out = os.environ["GITHUB_OUTPUT"]
-with open(out, "a") as f:
-    f.write(f"jdk_version={target_jdk}\n")
-    f.write(f"agp_version={target_agp}\n")
-    f.write(f"gradle_version={gradle_ver}\n")
-
-print("Compatibility auto-fix complete.")
-PYEOF
-
-      # ----------------------------------------------------------
-      # 3. JDK (version resolved above)
-      # ----------------------------------------------------------
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -215,285 +69,131 @@ PYEOF
           java-version: ${{ steps.detect_fix.outputs.jdk_version }}
           cache: gradle
 
-      # ----------------------------------------------------------
-      # 4. System utilities
-      # ----------------------------------------------------------
       - name: Install utilities
         run: sudo apt-get update -y && sudo apt-get install -y zip unzip
 
-      # ----------------------------------------------------------
-      # 5. Auto-detect old package name
-      # ----------------------------------------------------------
       - name: Auto-detect old package
         id: detect
-        shell: bash
         run: |
           set -euo pipefail
           INPUT_OLD="${{ github.event.inputs.old_package }}"
-
           if [[ -n "$INPUT_OLD" ]]; then
             echo "old_package=$INPUT_OLD" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           DETECTED=""
-
-          # Try app/build.gradle first
           if [[ -f "app/build.gradle" ]]; then
             DETECTED=$(grep -oP 'applicationId\s+"\K[^"]+' app/build.gradle | head -n1 || true)
           fi
-
-          # Fallback: app/build.gradle.kts
-          if [[ -z "$DETECTED" && -f "app/build.gradle.kts" ]]; then
+          if [[ -z "$DETECTED" ]] && [[ -f "app/build.gradle.kts" ]]; then
             DETECTED=$(grep -oP 'applicationId\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1 || true)
           fi
-
-          # Fallback: AndroidManifest.xml
-          if [[ -z "$DETECTED" && -f "app/src/main/AndroidManifest.xml" ]]; then
+          if [[ -z "$DETECTED" ]] && [[ -f "app/src/main/AndroidManifest.xml" ]]; then
             DETECTED=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml | head -n1 || true)
           fi
-
           if [[ -z "$DETECTED" ]]; then
             DETECTED="com.android.launcher2"
             echo "::warning::Could not auto-detect package name; falling back to $DETECTED"
           fi
-
           echo "Detected old package: $DETECTED"
           echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
 
-      # ----------------------------------------------------------
-      # 6. Generate keystore
-      # ----------------------------------------------------------
       - name: Generate keystore
         id: keystore
-        shell: bash
         run: |
           set -euo pipefail
           SEED="${{ github.event.inputs.keystore_seed }}"
-
           if [[ -z "$SEED" ]]; then
             SEED=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
           fi
-
-          STOREPASS=$(echo -n "$SEED"       | sha256sum | cut -c1-16)
-          KEYPASS=$(  echo -n "key:$SEED"   | sha256sum | cut -c1-16)
+          STOREPASS=$(echo -n "$SEED"      | sha256sum | cut -c1-16)
+          KEYPASS=$(  echo -n "key:$SEED"  | sha256sum | cut -c1-16)
           ALIAS="ci-key"
           KEYSTORE="release.keystore"
-
-          keytool -genkeypair -v \
-            -storetype JKS \
-            -keystore  "$KEYSTORE" \
-            -storepass "$STOREPASS" \
-            -alias     "$ALIAS" \
-            -keyalg RSA -keysize 2048 \
-            -validity  10000 \
-            -keypass   "$KEYPASS" \
-            -dname     "CN=CI,OU=Auto,O=GH,C=US" \
-            > /dev/null 2>&1
-
+          keytool -genkeypair -v             -storetype JKS             -keystore  "$KEYSTORE"             -storepass "$STOREPASS"             -alias     "$ALIAS"             -keyalg RSA -keysize 2048             -validity  10000             -keypass   "$KEYPASS"             -dname     "CN=CI,OU=Auto,O=GH,C=US"             > /dev/null 2>&1
           echo "::add-mask::$STOREPASS"
           echo "::add-mask::$KEYPASS"
-
           echo "storepass=$STOREPASS" >> "$GITHUB_OUTPUT"
           echo "keypass=$KEYPASS"     >> "$GITHUB_OUTPUT"
           echo "alias=$ALIAS"         >> "$GITHUB_OUTPUT"
           echo "keystore=$KEYSTORE"   >> "$GITHUB_OUTPUT"
 
-      # ----------------------------------------------------------
-      # 7. Replace package name, app label, and version metadata
-      # ----------------------------------------------------------
-      - name: Replace package & version
-        shell: bash
+      - name: Replace package and version
         env:
-          OLD_PKG:   ${{ steps.detect.outputs.old_package }}
-          NEW_PKG:   ${{ github.event.inputs.new_package }}
-          APP_LABEL: ${{ github.event.inputs.app_label }}
-          VER_NAME:  ${{ github.event.inputs.version_name }}
-          VER_CODE:  ${{ github.event.inputs.version_code }}
+          OLD_PKG:   "${{ steps.detect.outputs.old_package }}"
+          NEW_PKG:   "${{ github.event.inputs.new_package }}"
+          APP_LABEL: "${{ github.event.inputs.app_label }}"
+          VER_NAME:  "${{ github.event.inputs.version_name }}"
+          VER_CODE:  "${{ github.event.inputs.version_code }}"
         run: |
           set -euo pipefail
-
           : "${NEW_PKG:?new_package input is required}"
           : "${OLD_PKG:?old_package could not be detected}"
-
-          echo "Replacing package: $OLD_PKG  →  $NEW_PKG"
-
-          # -- Package name in build.gradle(s) --
-          find . \( -name "build.gradle" -o -name "build.gradle.kts" \) \
-               -not -path "*/build/*" | while read -r f; do
+          echo "Replacing package: $OLD_PKG -> $NEW_PKG"
+          find . \( -name "build.gradle" -o -name "build.gradle.kts" \)                -not -path "*/build/*" | while read -r f; do
             sed -i "s|applicationId[[:space:]]*\"${OLD_PKG}\"|applicationId \"${NEW_PKG}\"|g" "$f"
             sed -i "s|applicationId[[:space:]]*=[[:space:]]*\"${OLD_PKG}\"|applicationId = \"${NEW_PKG}\"|g" "$f"
           done
-
-          # -- Package name in AndroidManifest.xml --
           find . -name "AndroidManifest.xml" -not -path "*/build/*" | while read -r f; do
             sed -i "s|package=\"${OLD_PKG}\"|package=\"${NEW_PKG}\"|g" "$f"
           done
-
-          # -- Java/Kotlin source: package & import statements --
           find . \( -name "*.java" -o -name "*.kt" \) -not -path "*/build/*" | while read -r f; do
-            sed -i "s|^package ${OLD_PKG}|package ${NEW_PKG}|g"  "$f"
-            sed -i "s|import ${OLD_PKG}\.|import ${NEW_PKG}.|g"  "$f"
+            sed -i "s|^package ${OLD_PKG}|package ${NEW_PKG}|g" "$f"
+            sed -i "s|import ${OLD_PKG}\.|import ${NEW_PKG}.|g" "$f"
           done
-
-          # -- App label in strings.xml --
           if [[ -n "$APP_LABEL" ]]; then
             find . -name "strings.xml" -not -path "*/build/*" | while read -r f; do
               sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${APP_LABEL}</string>|g" "$f"
             done
           fi
+          if [[ -f "app/build.gradle" ]]; then
+            sed -i "s|versionName[[:space:]]*\"[^\"]*\"|versionName \"${VER_NAME}\"|g"  app/build.gradle
+            sed -i "s|versionCode[[:space:]]*[0-9]*|versionCode ${VER_CODE}|g"          app/build.gradle
+          fi
+          if [[ -f "app/build.gradle.kts" ]]; then
+            sed -i "s|versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"|versionName = \"${VER_NAME}\"|g" app/build.gradle.kts
+            sed -i "s|versionCode[[:space:]]*=[[:space:]]*[0-9]*|versionCode = ${VER_CODE}|g"        app/build.gradle.kts
+          fi
+          echo "Package and version replacement complete."
 
-          # -- Version name & code in app/build.gradle --
-          APP_GRADLE="app/build.gradle"
-          APP_GRADLE_KTS="app/build.gradle.kts"
-
-          patch_version() {
-            local f="$1"
-            local is_kts="$2"
-            if [[ "$is_kts" == "true" ]]; then
-              sed -i "s|versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"|versionName = \"${VER_NAME}\"|g" "$f"
-              sed -i "s|versionCode[[:space:]]*=[[:space:]]*[0-9]*|versionCode = ${VER_CODE}|g"        "$f"
-            else
-              sed -i "s|versionName[[:space:]]*\"[^\"]*\"|versionName \"${VER_NAME}\"|g"              "$f"
-              sed -i "s|versionCode[[:space:]]*[0-9]*|versionCode ${VER_CODE}|g"                      "$f"
-            fi
-          }
-
-          [[ -f "$APP_GRADLE"     ]] && patch_version "$APP_GRADLE"     "false"
-          [[ -f "$APP_GRADLE_KTS" ]] && patch_version "$APP_GRADLE_KTS" "true"
-
-          echo "Package & version replacement complete."
-
-      # ----------------------------------------------------------
-      # 8. Inject signing config into app/build.gradle
-      # ----------------------------------------------------------
       - name: Inject signing config
-        shell: bash
         env:
-          KEYSTORE_PATH: ${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}
-          STORE_PASS:    ${{ steps.keystore.outputs.storepass }}
-          KEY_ALIAS:     ${{ steps.keystore.outputs.alias }}
-          KEY_PASS:      ${{ steps.keystore.outputs.keypass }}
+          KEYSTORE_PATH: "${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}"
+          STORE_PASS:    "${{ steps.keystore.outputs.storepass }}"
+          KEY_ALIAS:     "${{ steps.keystore.outputs.alias }}"
+          KEY_PASS:      "${{ steps.keystore.outputs.keypass }}"
         run: |
-          set -euo pipefail
+          echo "aW1wb3J0IG9zLCByZQoKa3NfcGF0aCAgPSBvcy5lbnZpcm9uWyJLRVlTVE9SRV9QQVRIIl0Kc3RvcmVfcHcgPSBvcy5lbnZpcm9uWyJTVE9SRV9QQVNTIl0KYWxpYXMgICAgPSBvcy5lbnZpcm9uWyJLRVlfQUxJQVMiXQprZXlfcHcgICA9IG9zLmVudmlyb25bIktFWV9QQVNTIl0KCnNpZ25pbmdfYmxvY2sgPSBmIiIiCiAgICBzaWduaW5nQ29uZmlncyB7ewogICAgICAgIHJlbGVhc2Uge3sKICAgICAgICAgICAgc3RvcmVGaWxlIGZpbGUoIntrc19wYXRofSIpCiAgICAgICAgICAgIHN0b3JlUGFzc3dvcmQgIntzdG9yZV9wd30iCiAgICAgICAgICAgIGtleUFsaWFzICAgICAie2FsaWFzfSIKICAgICAgICAgICAga2V5UGFzc3dvcmQgICJ7a2V5X3B3fSIKICAgICAgICB9fQogICAgfX0KIiIiCgpyZWxlYXNlX3NpZ25pbmcgPSAiICAgICAgICAgICAgc2lnbmluZ0NvbmZpZyBzaWduaW5nQ29uZmlncy5yZWxlYXNlXG4iCgpmb3IgYmYgaW4gKCJhcHAvYnVpbGQuZ3JhZGxlIiwpOgogICAgaWYgbm90IG9zLnBhdGguZXhpc3RzKGJmKToKICAgICAgICBjb250aW51ZQogICAgd2l0aCBvcGVuKGJmLCAiciIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICAgICAgY29udGVudCA9IGYucmVhZCgpCiAgICBpZiAic2lnbmluZ0NvbmZpZ3MiIGluIGNvbnRlbnQ6CiAgICAgICAgcHJpbnQoZiJ7YmZ9OiBzaWduaW5nQ29uZmlncyBhbHJlYWR5IHByZXNlbnQsIHNraXBwaW5nIGluamVjdGlvbi4iKQogICAgICAgIGNvbnRpbnVlCiAgICBjb250ZW50ID0gcmUuc3ViKAogICAgICAgIHIiKGFuZHJvaWRccypceykiLAogICAgICAgIHNpZ25pbmdfYmxvY2sgKyByIlwxIiwKICAgICAgICBjb250ZW50LAogICAgICAgIGNvdW50PTEsCiAgICApCiAgICBjb250ZW50ID0gcmUuc3ViKAogICAgICAgIHIiKGJ1aWxkVHlwZXNccypce1tefV0qcmVsZWFzZVxzKlx7KSIsCiAgICAgICAgciJcMVxuIiArIHJlbGVhc2Vfc2lnbmluZywKICAgICAgICBjb250ZW50LAogICAgICAgIGNvdW50PTEsCiAgICAgICAgZmxhZ3M9cmUuRE9UQUxMLAogICAgKQogICAgaWYgImNvbXBpbGVPcHRpb25zIiBub3QgaW4gY29udGVudDoKICAgICAgICBjb250ZW50ID0gcmUuc3ViKAogICAgICAgICAgICByIihhbmRyb2lkXHMqXHspIiwKICAgICAgICAgICAgciJcMVxuICAgIGNvbXBpbGVPcHRpb25zIHtcbiAgICAgICAgc291cmNlQ29tcGF0aWJpbGl0eSBKYXZhVmVyc2lvbi5WRVJTSU9OXzFfOFxuICAgICAgICB0YXJnZXRDb21wYXRpYmlsaXR5IEphdmFWZXJzaW9uLlZFUlNJT05fMV84XG4gICAgfVxuIiwKICAgICAgICAgICAgY29udGVudCwKICAgICAgICAgICAgY291bnQ9MSwKICAgICAgICApCiAgICB3aXRoIG9wZW4oYmYsICJ3IiwgZW5jb2Rpbmc9InV0Zi04IikgYXMgZjoKICAgICAgICBmLndyaXRlKGNvbnRlbnQpCgpwcmludCgiU2lnbmluZyBjb25maWcgaW5qZWN0aW9uIGNvbXBsZXRlLiIpCg==" | base64 -d > /tmp/inject_signing.py
+          python3 /tmp/inject_signing.py
 
-          python3 - <<'PYEOF'
-import os, re
-
-ks_path  = os.environ["KEYSTORE_PATH"]
-store_pw = os.environ["STORE_PASS"]
-alias    = os.environ["KEY_ALIAS"]
-key_pw   = os.environ["KEY_PASS"]
-
-signing_block = f"""
-    signingConfigs {{
-        release {{
-            storeFile file("{ks_path}")
-            storePassword "{store_pw}"
-            keyAlias     "{alias}"
-            keyPassword  "{key_pw}"
-        }}
-    }}
-"""
-
-release_signing = '            signingConfig signingConfigs.release\n'
-
-for bf in ("app/build.gradle",):
-    if not os.path.exists(bf):
-        continue
-    with open(bf, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Skip if signing config already present
-    if "signingConfigs" in content:
-        print(f"{bf}: signingConfigs already present, skipping injection.")
-        continue
-
-    # Inject signingConfigs block before android { ... }
-    content = re.sub(
-        r"(android\s*\{)",
-        signing_block + r"\1",
-        content,
-        count=1,
-    )
-
-    # Inject signingConfig reference inside buildTypes { release { ... } }
-    content = re.sub(
-        r"(buildTypes\s*\{[^}]*release\s*\{)",
-        r"\1\n" + release_signing,
-        content,
-        count=1,
-        flags=re.DOTALL,
-    )
-
-    # Ensure compileOptions present (avoids Java version mismatch errors)
-    if "compileOptions" not in content:
-        content = re.sub(
-            r"(android\s*\{)",
-            r"\1\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n",
-            content,
-            count=1,
-        )
-
-    with open(bf, "w", encoding="utf-8") as f:
-        f.write(content)
-
-print("Signing config injection complete.")
-PYEOF
-
-      # ----------------------------------------------------------
-      # 9. Grant execute permission to gradlew
-      # ----------------------------------------------------------
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # ----------------------------------------------------------
-      # 10. Build
-      # ----------------------------------------------------------
       - name: Build APK
-        shell: bash
         env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.configureondemand=false"
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false"
         run: |
-          set -euo pipefail
-          ./gradlew "${{ github.event.inputs.gradle_task }}" \
-            --no-daemon \
-            --stacktrace \
-            -Pandroid.injected.signing.store.file="${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}" \
-            -Pandroid.injected.signing.store.password="${{ steps.keystore.outputs.storepass }}" \
-            -Pandroid.injected.signing.key.alias="${{ steps.keystore.outputs.alias }}" \
-            -Pandroid.injected.signing.key.password="${{ steps.keystore.outputs.keypass }}"
+          ./gradlew "${{ github.event.inputs.gradle_task }}"             --no-daemon             --stacktrace             -Pandroid.injected.signing.store.file="${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}"             -Pandroid.injected.signing.store.password="${{ steps.keystore.outputs.storepass }}"             -Pandroid.injected.signing.key.alias="${{ steps.keystore.outputs.alias }}"             -Pandroid.injected.signing.key.password="${{ steps.keystore.outputs.keypass }}"
 
-      # ----------------------------------------------------------
-      # 11. Locate and rename the output APK
-      # ----------------------------------------------------------
       - name: Locate and rename APK
         id: apk
-        shell: bash
         run: |
           set -euo pipefail
-
           APK_PATH=$(find . -path "*/build/outputs/apk/release/*.apk" | head -n1)
-
           if [[ -z "$APK_PATH" ]]; then
             echo "::error::No release APK found under build/outputs/apk/release/"
             exit 1
           fi
-
           NEW_PKG="${{ github.event.inputs.new_package }}"
           VER_NAME="${{ github.event.inputs.version_name }}"
           DEST_NAME="${NEW_PKG}_${VER_NAME}.apk"
           DEST_DIR="$(dirname "$APK_PATH")"
           DEST_PATH="$DEST_DIR/$DEST_NAME"
-
           mv "$APK_PATH" "$DEST_PATH"
           echo "apk_path=$DEST_PATH" >> "$GITHUB_OUTPUT"
           echo "apk_name=$DEST_NAME" >> "$GITHUB_OUTPUT"
           echo "Renamed APK: $DEST_PATH"
 
-      # ----------------------------------------------------------
-      # 12. Upload artifact
-      # ----------------------------------------------------------
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
