@@ -1,6 +1,6 @@
 name: Android Build & Package Rename
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       old_package:
@@ -45,266 +45,459 @@ name: Android Build & Package Rename
 jobs:
   build:
     name: "Build & Rename APK"
-    runs-on: "ubuntu-latest"
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
     steps:
-      - name: "Checkout repository"
-        uses: "actions/checkout@v4"
+      # ----------------------------------------------------------
+      # 1. Checkout
+      # ----------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ==========================================
-      # 核心修复步骤：自动检测环境、修复编码、对齐版本
-      # ==========================================
-      - name: "Detect project requirements and auto-fix compatibility"
-        id: "detect_fix"
+      # ----------------------------------------------------------
+      # 2. Detect Gradle / AGP / JDK requirements and auto-fix
+      # ----------------------------------------------------------
+      - name: Detect project requirements and auto-fix compatibility
+        id: detect_fix
+        shell: bash
         run: |
           set -euo pipefail
-          python3 << 'PYEOF'
-import os
-import re
-import sys
 
-gradle_ver = "7.5" # 默认 Gradle 版本
+          python3 - <<'PYEOF'
+import os, re, sys
+
+gradle_ver = "7.5"
 agp_ver = None
 
-# 1. 读取项目指定的 Gradle 版本
+# --- Read wrapper Gradle version ---
 props_file = "gradle/wrapper/gradle-wrapper.properties"
 if os.path.exists(props_file):
-    with open(props_file, 'r', encoding='utf-8') as f:
+    with open(props_file, "r", encoding="utf-8") as f:
         for line in f:
             if "distributionUrl" in line:
-                m = re.search(r'gradle-([\d.]+)', line)
+                m = re.search(r"gradle-([\d.]+)", line)
                 if m:
                     gradle_ver = m.group(1)
                     break
-                    
+
 print(f"Detected Gradle version: {gradle_ver}")
 
-# 2. 根据 Gradle 版本推导兼容的 JDK 和 AGP 版本
 try:
-    gradle_major = int(gradle_ver.split('.')[0])
-except:
+    gradle_major = int(gradle_ver.split(".")[0])
+except Exception:
     gradle_major = 7
 
+# --- Derive compatible JDK + AGP ---
 if gradle_major >= 8:
     target_jdk = "17"
     target_agp = "8.1.4"
-elif gradle_major >= 7:
-    if gradle_ver >= "7.3":
-        target_jdk = "17"
-        target_agp = "7.4.2"
-    else:
-        target_jdk = "11"
-        target_agp = "7.2.2"
+elif gradle_ver >= "7.3":
+    target_jdk = "17"
+    target_agp = "7.4.2"
 else:
     target_jdk = "11"
-    target_agp = "4.2.2"
-    
-# 3. 自动清理所有 Gradle 文件的 BOM 头 (防止 Gradle 解析第一行时崩溃)
-for root, dirs, files in os.walk('.'):
-    if 'build' in root or '.gradle' in root or '.git' in root:
-        continue
-    for file in files:
-        if file.endswith('.gradle') or file.endswith('.gradle.kts'):
-            filepath = os.path.join(root, file)
+    target_agp = "7.2.2"
+
+# --- Strip BOM from all Gradle files ---
+for root, dirs, files in os.walk("."):
+    dirs[:] = [d for d in dirs if d not in ("build", ".gradle", ".git")]
+    for fname in files:
+        if fname.endswith(".gradle") or fname.endswith(".gradle.kts"):
+            fp = os.path.join(root, fname)
             try:
-                with open(filepath, 'r', encoding='utf-8-sig') as f:
+                with open(fp, "r", encoding="utf-8-sig") as f:
                     content = f.read()
-                with open(filepath, 'w', encoding='utf-8') as f:
+                with open(fp, "w", encoding="utf-8") as f:
                     f.write(content)
             except Exception:
                 pass
-                
-# 4. 尝试读取项目现有的 AGP 版本
-build_files = ["build.gradle", "build.gradle.kts"]
-for bf in build_files:
+
+# --- Read existing AGP from project files ---
+for bf in ("build.gradle", "build.gradle.kts"):
     if os.path.exists(bf):
-        with open(bf, 'r', encoding='utf-8') as f:
-            content = f.read()
-        m = re.search(r"com\.android\.tools\.build:gradle:([\d.]+)", content)
+        with open(bf, "r", encoding="utf-8") as f:
+            c = f.read()
+        m = re.search(r"com\.android\.tools\.build:gradle:([\d.]+)", c)
         if m:
             agp_ver = m.group(1)
-            
-settings_files = ["settings.gradle", "settings.gradle.kts"]
-for sf in settings_files:
+
+for sf in ("settings.gradle", "settings.gradle.kts"):
     if os.path.exists(sf):
-        with open(sf, 'r', encoding='utf-8') as f:
-            content = f.read()
-        m = re.search(r"id\s*\(?\s*['\"]com\.android\.application['\"]\s*\)?\s+version\s+['\"]([\d.]+)['\"]", content)
+        with open(sf, "r", encoding="utf-8") as f:
+            c = f.read()
+        m = re.search(
+            r'id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?\s+version\s+[\'"]([\d.]+)[\'"]', c
+        )
         if m:
             agp_ver = m.group(1)
-            
+
 print(f"Detected AGP version: {agp_ver}")
 
-# 5. 如果现有 AGP 版本与推导的 JDK 冲突，进行动态调整
+# --- Reconcile JDK with detected AGP ---
 if agp_ver:
     try:
-        agp_major = int(agp_ver.split('.')[0])
+        agp_major = int(agp_ver.split(".")[0])
         if agp_major >= 8 and target_jdk == "11":
-            target_jdk = "17" # 老 JDK 跑不动 AGP 8+，强制升级 JDK
+            target_jdk = "17"
         elif agp_major < 7 and target_jdk == "17":
-            target_jdk = "11" # 新 JDK 跑不动老 AGP，强制降级 JDK 保平安
-            target_agp = agp_ver 
-    except:
+            target_jdk = "11"
+            target_agp = agp_ver
+    except Exception:
         pass
-        
-print(f"Final target JDK: {target_jdk}")
-print(f"Final target AGP: {target_agp}")
 
-# 6. 自动修复 build.gradle / build.gradle.kts，确保 AGP 版本正确且存在
-for bf in build_files:
-    if os.path.exists(bf):
-        is_kts = bf.endswith('.kts')
-        with open(bf, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        pattern = r"com\.android\.tools\.build:gradle:[\d\.]+"
-        if re.search(pattern, content):
-            new_content = re.sub(pattern, f"com.android.tools.build:gradle:{target_agp}", content)
+print(f"Final target JDK : {target_jdk}")
+print(f"Final target AGP : {target_agp}")
+
+# --- Patch root build.gradle to ensure AGP classpath ---
+for bf in ("build.gradle", "build.gradle.kts"):
+    if not os.path.exists(bf):
+        continue
+    is_kts = bf.endswith(".kts")
+    with open(bf, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    pattern = r"com\.android\.tools\.build:gradle:[\d\.]+"
+    if re.search(pattern, content):
+        new_content = re.sub(pattern, f"com.android.tools.build:gradle:{target_agp}", content)
+    else:
+        dep_pat = r"(buildscript\s*\{[^}]*dependencies\s*\{)"
+        if re.search(dep_pat, content, re.DOTALL):
+            inject = (
+                f'\n        classpath("com.android.tools.build:gradle:{target_agp}")'
+                if is_kts
+                else f"\n        classpath 'com.android.tools.build:gradle:{target_agp}'"
+            )
+            new_content = re.sub(dep_pat, f"\\1{inject}", content, count=1)
         else:
-            dep_pattern = r"(buildscript\s*\{[^}]*dependencies\s*\{)"
-            if re.search(dep_pattern, content, re.DOTALL):
-                if is_kts:
-                    inject_str = f'\n        classpath("com.android.tools.build:gradle:{target_agp}")'
-                else:
-                    inject_str = f"\n        classpath 'com.android.tools.build:gradle:{target_agp}'"
-                new_content = re.sub(dep_pattern, f"\\1{inject_str}", content, count=1)
-            else:
-                if is_kts:
-                    inject = f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath(\"com.android.tools.build:gradle:{target_agp}\")\n    }}\n}}\n"
-                else:
-                    inject = f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath 'com.android.tools.build:gradle:{target_agp}'\n    }}\n}}\n"
-                new_content = inject + content
-                
-        with open(bf, 'w', encoding='utf-8') as f:
+            block = (
+                f'\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath("com.android.tools.build:gradle:{target_agp}")\n    }}\n}}\n'
+                if is_kts
+                else f"\nbuildscript {{\n    repositories {{\n        google()\n        mavenCentral()\n    }}\n    dependencies {{\n        classpath 'com.android.tools.build:gradle:{target_agp}'\n    }}\n}}\n"
+            )
+            new_content = block + content
+
+    with open(bf, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+# --- Patch settings.gradle plugin version ---
+for sf in ("settings.gradle", "settings.gradle.kts"):
+    if not os.path.exists(sf):
+        continue
+    with open(sf, "r", encoding="utf-8") as f:
+        content = f.read()
+    pat = r'(id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?\s+version\s+[\'"])[\d\.]+([\'"])'
+    new_content = re.sub(pat, f"\\g<1>{target_agp}\\g<2>", content)
+    if new_content != content:
+        with open(sf, "w", encoding="utf-8") as f:
             f.write(new_content)
 
-# 7. 自动修复 settings.gradle 的 plugins DSL
-for sf in settings_files:
-    if os.path.exists(sf):
-        with open(sf, 'r', encoding='utf-8') as f:
-            content = f.read()
-        plugin_pattern = r"(id\s*\(?\s*['\"]com\.android\.application['\"]\s*\)?\s+version\s+['\"])[\d\.]+(['\"])"
-        
-        new_content = content
-        if re.search(plugin_pattern, content):
-            new_content = re.sub(plugin_pattern, f"\\g<1>{target_agp}\\g<2>", content)
-            
-        if new_content != content:
-            with open(sf, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-
-# 输出变量供后续步骤使用
-with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+# --- Write outputs ---
+out = os.environ["GITHUB_OUTPUT"]
+with open(out, "a") as f:
     f.write(f"jdk_version={target_jdk}\n")
     f.write(f"agp_version={target_agp}\n")
     f.write(f"gradle_version={gradle_ver}\n")
+
+print("Compatibility auto-fix complete.")
 PYEOF
-        shell: bash
 
-      # ==========================================
-      # 使用动态检测到的 JDK 版本
-      # ==========================================
-      - name: "Set up JDK"
-        uses: "actions/setup-java@v4"
+      # ----------------------------------------------------------
+      # 3. JDK (version resolved above)
+      # ----------------------------------------------------------
+      - name: Set up JDK
+        uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "${{ steps.detect_fix.outputs.jdk_version }}"
-          cache: "gradle"
+          distribution: temurin
+          java-version: ${{ steps.detect_fix.outputs.jdk_version }}
+          cache: gradle
 
-      - name: "Install utilities"
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y zip unzip grep sed findutils
+      # ----------------------------------------------------------
+      # 4. System utilities
+      # ----------------------------------------------------------
+      - name: Install utilities
+        run: sudo apt-get update -y && sudo apt-get install -y zip unzip
 
-      - name: "Auto-detect old package"
-        id: "detect"
+      # ----------------------------------------------------------
+      # 5. Auto-detect old package name
+      # ----------------------------------------------------------
+      - name: Auto-detect old package
+        id: detect
+        shell: bash
         run: |
           set -euo pipefail
           INPUT_OLD="${{ github.event.inputs.old_package }}"
-          
+
           if [[ -n "$INPUT_OLD" ]]; then
             echo "old_package=$INPUT_OLD" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          
-          DETECTED=""
-          if [[ -f "app/build.gradle" ]]; then
-            DETECTED=$(sed -n 's/.*applicationId[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle 2>/dev/null | head -n1) || true
-            if [[ -n "$DETECTED" ]]; then
-              echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          
-          if [[ -f "app/src/main/AndroidManifest.xml" ]]; then
-            DETECTED=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' app/src/main/AndroidManifest.xml 2>/dev/null | head -n1) || true
-            if [[ -n "$DETECTED" ]]; then
-              echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          
-          DEFAULT="com.android.launcher2"
-          echo "old_package=$DEFAULT" >> "$GITHUB_OUTPUT"
-        shell: bash
 
-      - name: "Generate keystore"
-        id: "keystore"
+          DETECTED=""
+
+          # Try app/build.gradle first
+          if [[ -f "app/build.gradle" ]]; then
+            DETECTED=$(grep -oP 'applicationId\s+"\K[^"]+' app/build.gradle | head -n1 || true)
+          fi
+
+          # Fallback: app/build.gradle.kts
+          if [[ -z "$DETECTED" && -f "app/build.gradle.kts" ]]; then
+            DETECTED=$(grep -oP 'applicationId\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1 || true)
+          fi
+
+          # Fallback: AndroidManifest.xml
+          if [[ -z "$DETECTED" && -f "app/src/main/AndroidManifest.xml" ]]; then
+            DETECTED=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml | head -n1 || true)
+          fi
+
+          if [[ -z "$DETECTED" ]]; then
+            DETECTED="com.android.launcher2"
+            echo "::warning::Could not auto-detect package name; falling back to $DETECTED"
+          fi
+
+          echo "Detected old package: $DETECTED"
+          echo "old_package=$DETECTED" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------
+      # 6. Generate keystore
+      # ----------------------------------------------------------
+      - name: Generate keystore
+        id: keystore
+        shell: bash
         run: |
           set -euo pipefail
           SEED="${{ github.event.inputs.keystore_seed }}"
-          
+
           if [[ -z "$SEED" ]]; then
             SEED=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
           fi
-          
-          STOREPASS=$(echo -n "$SEED" | sha256sum | cut -c1-16)
-          KEYPASS=$(echo -n "key:$SEED" | sha256sum | cut -c1-16)
+
+          STOREPASS=$(echo -n "$SEED"       | sha256sum | cut -c1-16)
+          KEYPASS=$(  echo -n "key:$SEED"   | sha256sum | cut -c1-16)
           ALIAS="ci-key"
           KEYSTORE="release.keystore"
-          
+
           keytool -genkeypair -v \
             -storetype JKS \
-            -keystore "$KEYSTORE" \
+            -keystore  "$KEYSTORE" \
             -storepass "$STOREPASS" \
-            -alias "$ALIAS" \
+            -alias     "$ALIAS" \
             -keyalg RSA -keysize 2048 \
-            -validity 10000 \
-            -keypass "$KEYPASS" \
-            -dname "CN=CI,OU=Auto,O=GH,C=US" \
-            >/dev/null 2>&1
-          
+            -validity  10000 \
+            -keypass   "$KEYPASS" \
+            -dname     "CN=CI,OU=Auto,O=GH,C=US" \
+            > /dev/null 2>&1
+
           echo "::add-mask::$STOREPASS"
           echo "::add-mask::$KEYPASS"
-          
-          echo "storepass=$STOREPASS" >> "$GITHUB_OUTPUT"
-          echo "keypass=$KEYPASS" >> "$GITHUB_OUTPUT"
-          echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
-          echo "keystore=$KEYSTORE" >> "$GITHUB_OUTPUT"
-        shell: bash
 
-      - name: "Replace package & version"
+          echo "storepass=$STOREPASS" >> "$GITHUB_OUTPUT"
+          echo "keypass=$KEYPASS"     >> "$GITHUB_OUTPUT"
+          echo "alias=$ALIAS"         >> "$GITHUB_OUTPUT"
+          echo "keystore=$KEYSTORE"   >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------
+      # 7. Replace package name, app label, and version metadata
+      # ----------------------------------------------------------
+      - name: Replace package & version
+        shell: bash
         env:
-          OLD_PKG: "${{ steps.detect.outputs.old_package }}"
-          NEW_PKG: "${{ github.event.inputs.new_package }}"
-          APP_LABEL: "${{ github.event.inputs.app_label }}"
-          VER_NAME: "${{ github.event.inputs.version_name }}"
-          VER_CODE: "${{ github.event.inputs.version_code }}"
+          OLD_PKG:   ${{ steps.detect.outputs.old_package }}
+          NEW_PKG:   ${{ github.event.inputs.new_package }}
+          APP_LABEL: ${{ github.event.inputs.app_label }}
+          VER_NAME:  ${{ github.event.inputs.version_name }}
+          VER_CODE:  ${{ github.event.inputs.version_code }}
         run: |
           set -euo pipefail
-          
-          : "${NEW_PKG:=com.whty.ebrowser}"
-          : "${APP_LABEL:=狼分身}"
-          : "${VER_NAME:=2.0.1.241130_BYOD}"
-          : "${VER_CODE:=14}"
-          
-          OLD="$OLD_PKG"
-          NEW="$NEW_PKG"
-          
-          OLD_ESC=$(printf '%s' "$OLD" | sed -e 's/[\/&]/\\&/g')
-          
-          find app/src -type f \( -name '*.java' -o -name '*.kt' -o -name
+
+          : "${NEW_PKG:?new_package input is required}"
+          : "${OLD_PKG:?old_package could not be detected}"
+
+          echo "Replacing package: $OLD_PKG  →  $NEW_PKG"
+
+          # -- Package name in build.gradle(s) --
+          find . \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+               -not -path "*/build/*" | while read -r f; do
+            sed -i "s|applicationId[[:space:]]*\"${OLD_PKG}\"|applicationId \"${NEW_PKG}\"|g" "$f"
+            sed -i "s|applicationId[[:space:]]*=[[:space:]]*\"${OLD_PKG}\"|applicationId = \"${NEW_PKG}\"|g" "$f"
+          done
+
+          # -- Package name in AndroidManifest.xml --
+          find . -name "AndroidManifest.xml" -not -path "*/build/*" | while read -r f; do
+            sed -i "s|package=\"${OLD_PKG}\"|package=\"${NEW_PKG}\"|g" "$f"
+          done
+
+          # -- Java/Kotlin source: package & import statements --
+          find . \( -name "*.java" -o -name "*.kt" \) -not -path "*/build/*" | while read -r f; do
+            sed -i "s|^package ${OLD_PKG}|package ${NEW_PKG}|g"  "$f"
+            sed -i "s|import ${OLD_PKG}\.|import ${NEW_PKG}.|g"  "$f"
+          done
+
+          # -- App label in strings.xml --
+          if [[ -n "$APP_LABEL" ]]; then
+            find . -name "strings.xml" -not -path "*/build/*" | while read -r f; do
+              sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${APP_LABEL}</string>|g" "$f"
+            done
+          fi
+
+          # -- Version name & code in app/build.gradle --
+          APP_GRADLE="app/build.gradle"
+          APP_GRADLE_KTS="app/build.gradle.kts"
+
+          patch_version() {
+            local f="$1"
+            local is_kts="$2"
+            if [[ "$is_kts" == "true" ]]; then
+              sed -i "s|versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"|versionName = \"${VER_NAME}\"|g" "$f"
+              sed -i "s|versionCode[[:space:]]*=[[:space:]]*[0-9]*|versionCode = ${VER_CODE}|g"        "$f"
+            else
+              sed -i "s|versionName[[:space:]]*\"[^\"]*\"|versionName \"${VER_NAME}\"|g"              "$f"
+              sed -i "s|versionCode[[:space:]]*[0-9]*|versionCode ${VER_CODE}|g"                      "$f"
+            fi
+          }
+
+          [[ -f "$APP_GRADLE"     ]] && patch_version "$APP_GRADLE"     "false"
+          [[ -f "$APP_GRADLE_KTS" ]] && patch_version "$APP_GRADLE_KTS" "true"
+
+          echo "Package & version replacement complete."
+
+      # ----------------------------------------------------------
+      # 8. Inject signing config into app/build.gradle
+      # ----------------------------------------------------------
+      - name: Inject signing config
+        shell: bash
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}
+          STORE_PASS:    ${{ steps.keystore.outputs.storepass }}
+          KEY_ALIAS:     ${{ steps.keystore.outputs.alias }}
+          KEY_PASS:      ${{ steps.keystore.outputs.keypass }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PYEOF'
+import os, re
+
+ks_path  = os.environ["KEYSTORE_PATH"]
+store_pw = os.environ["STORE_PASS"]
+alias    = os.environ["KEY_ALIAS"]
+key_pw   = os.environ["KEY_PASS"]
+
+signing_block = f"""
+    signingConfigs {{
+        release {{
+            storeFile file("{ks_path}")
+            storePassword "{store_pw}"
+            keyAlias     "{alias}"
+            keyPassword  "{key_pw}"
+        }}
+    }}
+"""
+
+release_signing = '            signingConfig signingConfigs.release\n'
+
+for bf in ("app/build.gradle",):
+    if not os.path.exists(bf):
+        continue
+    with open(bf, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Skip if signing config already present
+    if "signingConfigs" in content:
+        print(f"{bf}: signingConfigs already present, skipping injection.")
+        continue
+
+    # Inject signingConfigs block before android { ... }
+    content = re.sub(
+        r"(android\s*\{)",
+        signing_block + r"\1",
+        content,
+        count=1,
+    )
+
+    # Inject signingConfig reference inside buildTypes { release { ... } }
+    content = re.sub(
+        r"(buildTypes\s*\{[^}]*release\s*\{)",
+        r"\1\n" + release_signing,
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
+
+    # Ensure compileOptions present (avoids Java version mismatch errors)
+    if "compileOptions" not in content:
+        content = re.sub(
+            r"(android\s*\{)",
+            r"\1\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n",
+            content,
+            count=1,
+        )
+
+    with open(bf, "w", encoding="utf-8") as f:
+        f.write(content)
+
+print("Signing config injection complete.")
+PYEOF
+
+      # ----------------------------------------------------------
+      # 9. Grant execute permission to gradlew
+      # ----------------------------------------------------------
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ----------------------------------------------------------
+      # 10. Build
+      # ----------------------------------------------------------
+      - name: Build APK
+        shell: bash
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.configureondemand=false"
+        run: |
+          set -euo pipefail
+          ./gradlew "${{ github.event.inputs.gradle_task }}" \
+            --no-daemon \
+            --stacktrace \
+            -Pandroid.injected.signing.store.file="${{ github.workspace }}/${{ steps.keystore.outputs.keystore }}" \
+            -Pandroid.injected.signing.store.password="${{ steps.keystore.outputs.storepass }}" \
+            -Pandroid.injected.signing.key.alias="${{ steps.keystore.outputs.alias }}" \
+            -Pandroid.injected.signing.key.password="${{ steps.keystore.outputs.keypass }}"
+
+      # ----------------------------------------------------------
+      # 11. Locate and rename the output APK
+      # ----------------------------------------------------------
+      - name: Locate and rename APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_PATH=$(find . -path "*/build/outputs/apk/release/*.apk" | head -n1)
+
+          if [[ -z "$APK_PATH" ]]; then
+            echo "::error::No release APK found under build/outputs/apk/release/"
+            exit 1
+          fi
+
+          NEW_PKG="${{ github.event.inputs.new_package }}"
+          VER_NAME="${{ github.event.inputs.version_name }}"
+          DEST_NAME="${NEW_PKG}_${VER_NAME}.apk"
+          DEST_DIR="$(dirname "$APK_PATH")"
+          DEST_PATH="$DEST_DIR/$DEST_NAME"
+
+          mv "$APK_PATH" "$DEST_PATH"
+          echo "apk_path=$DEST_PATH" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$DEST_NAME" >> "$GITHUB_OUTPUT"
+          echo "Renamed APK: $DEST_PATH"
+
+      # ----------------------------------------------------------
+      # 12. Upload artifact
+      # ----------------------------------------------------------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.apk_name }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          retention-days: 7
+          if-no-files-found: error
